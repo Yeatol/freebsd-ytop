@@ -1,5 +1,7 @@
 # ytop
 
+[![FreeBSD port version](https://repology.org/badge/version-for-repo/freebsd/ytop.svg)](https://www.freshports.org/sysutils/ytop/)
+
 A minimal process monitor for FreeBSD, written in C++23. It uses FreeBSD's
 base-system compiler, `libkvm`, and `ncurses`.
 
