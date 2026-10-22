@@ -28,14 +28,14 @@
 #include "top.h"
 #include "tui.h"
 
-#include <print>
+#include <stdio.h>
 #include <string>
 
 int main(int argc, char**)
 {
     if (argc != 1)
     {
-        std::println(stderr, "ytop: command-line arguments are not supported");
+        fprintf(stderr, "ytop: command-line arguments are not supported\n");
         return 1;
     }
 
@@ -43,7 +43,7 @@ int main(int argc, char**)
     std::string error;
     if (!top_open(top, error))
     {
-        std::println(stderr, "ytop: {}", error);
+        fprintf(stderr, "ytop: %s\n", error.c_str());
         top_close(top);
         return 1;
     }

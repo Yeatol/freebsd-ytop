@@ -34,7 +34,7 @@
 #include <signal.h>
 #include <unistd.h>
 
-#include <print>
+#include <stdio.h>
 #include <cerrno>
 #include <chrono>
 #include <format>
@@ -227,7 +227,7 @@ int tui(top_t& top)
 {
     if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO))
     {
-        std::println(stderr, "ytop: an interactive terminal is required");
+        fprintf(stderr, "ytop: an interactive terminal is required\n");
         return 1;
     }
     stopped = 0;
@@ -427,7 +427,7 @@ int tui(top_t& top)
     }
     if (!error.empty())
     {
-        std::println(stderr, "ytop: {}", error);
+        fprintf(stderr, "ytop: %s\n", error.c_str());
     }
     return status;
 }
