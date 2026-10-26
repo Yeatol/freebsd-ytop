@@ -126,17 +126,19 @@ The first snapshot uses the kernel CPU estimate; later snapshots use runtime
 differences without process-age weighting. A multi-threaded process can exceed
 100%.
 
-`CPU_USR` and `CPU_SYS` use differences in `ki_rusage.ru_utime` and
-`ki_rusage.ru_stime`, divided by elapsed sample time. A value of 100% represents
-one CPU. Parent rows retain process totals when expanded; child rows use
-per-thread accounting. These rates are not normalized to sum to 100%.
+For user processes, `CPU_USR` and `CPU_SYS` use differences in
+`ki_rusage.ru_utime` and `ki_rusage.ru_stime`, divided by elapsed sample time.
+For kernel processes (`P_KPROC`) and their threads, `CPU_USR` is shown as `-`
+and `CPU_SYS` equals `CPU`; kernel CPU is not split using rusage time
+differences. A value of 100% represents one CPU. Parent rows retain process
+totals when expanded; child rows use per-thread accounting. These rates are
+not normalized to sum to 100%.
 
-The first sample displays `0.00%` until interval measurements are available,
-except for kernel processes (`P_KPROC`) and their threads: `CPU_SYS` initially
-matches `CPU`, while `CPU_USR` remains `0.00%`. A missing baseline on later
-samples or backwards counters show `-`; processes born since the previous
-sample use their accumulated times. Kernel accounting resolution and separately
-accounted interrupt time can cause `CPU_USR` + `CPU_SYS` to differ slightly
+For user processes, the first sample displays `0.00%` until interval
+measurements are available. A missing baseline on later samples or backwards
+counters show `-`; processes born since the previous sample use their
+accumulated times. Kernel accounting resolution and separately accounted
+interrupt time can cause user-process `CPU_USR` + `CPU_SYS` to differ slightly
 from `CPU`.
 
 ## Code structure

@@ -255,6 +255,7 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, const
         auto                  system_time_us = microseconds(p.ki_rusage.ru_stime);
         std::optional<double> user_cpu;
         std::optional<double> system_cpu;
+        const bool            kernel_process = (p.ki_flag & P_KPROC) != 0;
         if (sampled_at == 0)
         {
             user_cpu   = 0.0;
@@ -268,7 +269,7 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, const
             if (previous_record != previous.end() && previous_record->second.start.tv_sec == p.ki_start.tv_sec && previous_record->second.start.tv_usec == p.ki_start.tv_usec && p.ki_runtime >= previous_record->second.runtime_us)
             {
                 cpu_fraction = static_cast<double>(p.ki_runtime - previous_record->second.runtime_us) / sample_interval_us;
-                if (user_time_us >= previous_record->second.user_us && system_time_us >= previous_record->second.system_us)
+                if (!kernel_process && user_time_us >= previous_record->second.user_us && system_time_us >= previous_record->second.system_us)
                 {
                     user_cpu   = static_cast<double>(user_time_us - previous_record->second.user_us) / sample_interval_us * 100;
                     system_cpu = static_cast<double>(system_time_us - previous_record->second.system_us) / sample_interval_us * 100;
@@ -277,8 +278,11 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, const
             else if (timercmp(&p.ki_start, &sampled_wall, >=))
             {
                 cpu_fraction = static_cast<double>(p.ki_runtime) / sample_interval_us;
-                user_cpu     = static_cast<double>(user_time_us) / sample_interval_us * 100;
-                system_cpu   = static_cast<double>(system_time_us) / sample_interval_us * 100;
+                if (!kernel_process)
+                {
+                    user_cpu   = static_cast<double>(user_time_us) / sample_interval_us * 100;
+                    system_cpu = static_cast<double>(system_time_us) / sample_interval_us * 100;
+                }
             }
         }
         history.emplace(record_id, previous_process_t{p.ki_start, p.ki_runtime, user_time_us, system_time_us});
@@ -286,8 +290,9 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, const
         {
             cpu_fraction = std::min(cpu_fraction, 1.0);
         }
-        if (sampled_at == 0 && (p.ki_flag & P_KPROC))
+        if (kernel_process)
         {
+            user_cpu.reset();
             system_cpu = cpu_fraction * 100;
         }
 
