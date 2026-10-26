@@ -80,7 +80,9 @@ from `kvm_getprocs(KERN_PROC_ALL)` and are sorted by TID within each process.
 The TID already shown on the parent row is omitted from the child rows. Thread
 rows use `->` in the PID column and can be selected without toggling the parent.
 Multiple processes can remain expanded at once. Expansion persists across
-refreshes and is cleared when a process exits or its PID is reused.
+refreshes and is cleared when a process disappears from a sample or its
+accumulated runtime decreases. PID reuse between samples is not detected if
+the new process's accumulated runtime is at least that of the previous process.
 
 Expanded rows show per-thread state, runtime, CPU usage, and thread names.
 Thread COMMAND uses `process_name{thread_name}`, omitting the braces and thread
@@ -135,9 +137,12 @@ totals when expanded; child rows use per-thread accounting. These rates are
 not normalized to sum to 100%.
 
 For user processes, the first sample displays `0.00%` until interval
-measurements are available. A missing baseline on later samples or backwards
-counters show `-`; processes born since the previous sample use their
-accumulated times. Kernel accounting resolution and separately accounted
+measurements are available. On later samples, records with no previous entry
+or decreased accumulated runtime are treated as new instances: their
+accumulated CPU times are divided by the sample interval. For records treated
+as the same instance, if either user-mode or kernel-mode time decreases,
+both `CPU_USR` and `CPU_SYS` show `-`. Sample intervals are measured using
+`std::chrono::steady_clock`. Kernel accounting resolution and separately accounted
 interrupt time can cause user-process `CPU_USR` + `CPU_SYS` to differ slightly
 from `CPU`.
 
