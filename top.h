@@ -54,6 +54,8 @@ struct process_t
     int                   cpu;
     uint64_t              runtime_us;
     double                cpu_percent;
+    uint64_t              nvcsw;
+    uint64_t              nivcsw;
     std::optional<double> user_cpu_percent;
     std::optional<double> system_cpu_percent;
     std::string           command;

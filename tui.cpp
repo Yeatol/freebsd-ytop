@@ -104,7 +104,7 @@ struct display_row_t
     int         threads = 0;
 };
 
-static std::string process_line(const process_t& p, bool thread, const process_t& command_source)
+static std::string process_line(const process_t& p, bool thread, const process_t& command_source, bool show_context_switches = false)
 {
     std::string pid     = thread ? "  ->" : std::to_string(p.pid);
     std::string cpu     = p.cpu < 0 ? "-" : std::to_string(p.cpu);
@@ -136,6 +136,10 @@ static std::string process_line(const process_t& p, bool thread, const process_t
         row += std::format("{} ", command_source.affinity);
     }
     row += command_source.command;
+    if (thread || show_context_switches)
+    {
+        row += std::format(" (nivcsw={}, nvcsw={})", command_source.nivcsw, command_source.nvcsw);
+    }
     return row;
 }
 
@@ -161,7 +165,7 @@ static std::vector<display_row_t> lines(const snapshot_t& snapshot, const std::u
         {
             command_source = &*representative;
         }
-        result.push_back({process_line(p, false, *command_source), p.pid, p.tid, false, p.threads});
+        result.push_back({process_line(p, false, *command_source, true), p.pid, p.tid, false, p.threads});
         for (auto thread = thread_begin; thread != thread_end; ++thread)
         {
             if (thread->tid != p.tid)
@@ -365,7 +369,7 @@ int tui(top_t& top)
                     else if ((mouse.bstate & BUTTON1_PRESSED) && mouse.y > 0 && mouse.y < visible_line_count && mouse.x >= 0 && mouse.x < width)
                     {
                         const auto& clicked_row = output[mouse.y + scroll_offset];
-                        if (!clicked_row.thread && clicked_row.threads > 1 && selected_pid == clicked_row.pid && selected_tid == -1)
+                        if (!clicked_row.thread && clicked_row.threads > 0 && selected_pid == clicked_row.pid && selected_tid == -1)
                         {
                             toggle_threads(expanded, clicked_row.pid, top.previous.at(clicked_row.pid).start);
                         }
@@ -382,7 +386,7 @@ int tui(top_t& top)
                 }
                 else if (input_event == ' ' && selected_tid == -1)
                 {
-                    auto expandable_process = std::ranges::find_if(snapshot.processes, [&](const process_t& p) { return p.pid == selected_pid && p.threads > 1; });
+                    auto expandable_process = std::ranges::find_if(snapshot.processes, [&](const process_t& p) { return p.pid == selected_pid && p.threads > 0; });
                     if (expandable_process != snapshot.processes.end())
                     {
                         toggle_threads(expanded, selected_pid, top.previous.at(selected_pid).start);

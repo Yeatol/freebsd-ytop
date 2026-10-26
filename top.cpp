@@ -335,6 +335,8 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, const
             .cpu                = cpu_id == NOCPU ? -1 : cpu_id,
             .runtime_us         = p.ki_runtime,
             .cpu_percent        = cpu_fraction * 100,
+            .nvcsw              = static_cast<uint64_t>(p.ki_rusage.ru_nvcsw),
+            .nivcsw             = static_cast<uint64_t>(p.ki_rusage.ru_nivcsw),
             .user_cpu_percent   = user_cpu,
             .system_cpu_percent = system_cpu,
             .command            = command,

@@ -27,8 +27,8 @@ access is not required when the system permits access.
 | Input | Action |
 | --- | --- |
 | `Up` / `Down` | Move the selection by one displayed row, including thread rows. Selection does not wrap; the list scrolls to keep it visible. With no selection, `Down` selects the first visible row and `Up` selects the last visible row. |
-| `Space` | Expand or collapse the selected parent process when it has more than one thread. Does nothing on a thread row, a single-thread process, or when nothing is selected. |
-| Left-click | Select a process. Clicking the already selected process expands or collapses its threads when it has more than one thread. Clicking the header or blank space does not change the selection. |
+| `Space` | For a selected multi-threaded process, expand or collapse its thread rows. For a selected single-threaded process, show or hide its main thread's context-switch counts. Does nothing on a thread row or when nothing is selected. |
+| Left-click | Select a process. Clicking the already selected process toggles its thread rows when it has more than one thread, or toggles its main thread's context-switch counts when it has one thread. Clicking the header or blank space does not change the selection. |
 | Mouse wheel | Scroll three rows per step. Scrolling is bounded by the list and adjusted when rows disappear or collapse. |
 | `q` / `Ctrl+C` | Quit and restore the terminal. |
 
@@ -87,16 +87,22 @@ Thread COMMAND uses `process_name{thread_name}`, omitting the braces and thread
 name when both names are identical. Unnamed threads use `process_name{}`.
 
 While expanded, the parent COMMAND also uses the thread name matching its
-displayed TID; other parent columns retain process-wide values. If that thread
+displayed TID; other parent columns retain process-wide values. The parent and
+each displayed thread append that thread's cumulative voluntary and involuntary
+context-switch counts in the form `(nivcsw=N, nvcsw=N)`. These values come from
+`ki_rusage.ru_nivcsw` and `ki_rusage.ru_nvcsw`, respectively. For a
+single-threaded process, `Space` or clicking the selected process toggles the
+parent's counts without adding a thread row. If the representative thread
 disappears between the two kernel queries, the parent keeps the process name
-until a matching sample is available. Collapsing restores the process name.
+and process counters until a matching sample is available. Collapsing restores
+the process name and hides the counts.
 
 Expanded rows, including the parent row's representative TID, prefix COMMAND
 with the thread's effective CPU affinity. For example:
 
 ```text
-[CPU0] process{thread}
-[jail:69] [CPU0,2,3] process{thread}
+[CPU0] process{thread} (nivcsw=N, nvcsw=N)
+[jail:69] [CPU0,2,3] process{thread} (nivcsw=N, nvcsw=N)
 ```
 
 Masks equal to the monitor's root CPU set are omitted. Inherited process or jail
@@ -146,7 +152,7 @@ returning, including on errors.
 
 | Files | Responsibility |
 | --- | --- |
-| `top.cpp` / `top.h` | Process sampling through `kvm_getprocs(KERN_PROC_PROC)`, username lookup, and ascending PID sorting. |
+| `top.cpp` / `top.h` | Process and thread sampling through `kvm_getprocs`, including per-thread context-switch counts, username lookup, and ascending PID sorting. |
 | `tui.cpp` / `tui.h` | Curses rendering, signal handling, and refresh loop. |
 | `main.cpp` | Application startup and cleanup. |
 
