@@ -36,15 +36,14 @@
 #include <sys/resource.h>
 
 #include <kvm.h>
+#include <sys/time.h>
 #include <pwd.h>
 #include <fcntl.h>
 #include <paths.h>
 #include <stddef.h>
 #include <unistd.h>
 
-#include <ctime>
 #include <format>
-#include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <iterator>
@@ -176,11 +175,10 @@ static uint64_t microseconds(const timeval& time)
 struct sample_history_t
 {
     std::unordered_map<int, previous_process_t> previous;
-    uint64_t                                    sampled_at;
-    timeval                                     sampled_wall;
+    std::chrono::steady_clock::time_point       sampled_at;
 };
 
-static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, const std::unordered_map<int, previous_process_t>& previous, uint64_t sampled_at, const timeval& sampled_wall, sample_history_t& next_history, std::string& error)
+static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, const std::unordered_map<int, previous_process_t>& previous, std::chrono::steady_clock::time_point sampled_at, sample_history_t& next_history, std::string& error)
 {
     int         count   = 0;
     kinfo_proc* entries = kvm_getprocs(top.kernel, threads ? KERN_PROC_ALL : KERN_PROC_PROC, 0, &count);
@@ -189,15 +187,10 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, const
         error = std::format("kvm_getprocs: {}", kvm_geterr(top.kernel));
         return false;
     }
-    timespec uptime_sample{};
-    timeval  wall_clock_sample{};
-    if (clock_gettime(CLOCK_UPTIME, &uptime_sample) == -1 || gettimeofday(&wall_clock_sample, nullptr) == -1)
-    {
-        error = std::format("reading clock: {}", std::strerror(errno));
-        return false;
-    }
-    auto       sample_timestamp_us = static_cast<uint64_t>(uptime_sample.tv_sec) * 1000000 + static_cast<uint64_t>(uptime_sample.tv_nsec) / 1000;
-    auto       sample_interval_us  = sample_timestamp_us > sampled_at ? sample_timestamp_us - sampled_at : 0;
+
+    auto sample_timestamp   = std::chrono::steady_clock::now();
+    auto sample_interval_us = sampled_at != std::chrono::steady_clock::time_point{} && sample_timestamp > sampled_at ? static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(sample_timestamp - sampled_at).count()) : 0;
+
     snapshot_t next;
     next.processes.reserve(static_cast<size_t>(count));
     std::unordered_map<int, previous_process_t> history;
@@ -255,18 +248,19 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, const
         auto                  system_time_us = microseconds(p.ki_rusage.ru_stime);
         std::optional<double> user_cpu;
         std::optional<double> system_cpu;
-        const bool            kernel_process = (p.ki_flag & P_KPROC) != 0;
-        if (sampled_at == 0)
+        bool                  kernel_process = (p.ki_flag & P_KPROC) != 0;
+        if (sampled_at == std::chrono::steady_clock::time_point{})
         {
             user_cpu   = 0.0;
             system_cpu = 0.0;
         }
         int  record_id       = threads ? p.ki_tid : p.ki_pid;
         auto previous_record = previous.find(record_id);
-        if (sampled_at != 0 && sample_interval_us != 0)
+        bool same_process    = previous_record != previous.end() && p.ki_runtime >= previous_record->second.runtime_us;
+        if (sample_interval_us != 0)
         {
             // A PID may have been reused between samples.
-            if (previous_record != previous.end() && previous_record->second.start.tv_sec == p.ki_start.tv_sec && previous_record->second.start.tv_usec == p.ki_start.tv_usec && p.ki_runtime >= previous_record->second.runtime_us)
+            if (same_process)
             {
                 cpu_fraction = static_cast<double>(p.ki_runtime - previous_record->second.runtime_us) / sample_interval_us;
                 if (!kernel_process && user_time_us >= previous_record->second.user_us && system_time_us >= previous_record->second.system_us)
@@ -275,7 +269,7 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, const
                     system_cpu = static_cast<double>(system_time_us - previous_record->second.system_us) / sample_interval_us * 100;
                 }
             }
-            else if (timercmp(&p.ki_start, &sampled_wall, >=))
+            else if (!same_process)
             {
                 cpu_fraction = static_cast<double>(p.ki_runtime) / sample_interval_us;
                 if (!kernel_process)
@@ -285,7 +279,8 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, const
                 }
             }
         }
-        history.emplace(record_id, previous_process_t{p.ki_start, p.ki_runtime, user_time_us, system_time_us});
+        auto first_seen = same_process ? previous_record->second.first_seen : sample_timestamp;
+        history.emplace(record_id, previous_process_t{first_seen, p.ki_runtime, user_time_us, system_time_us});
         if (threads)
         {
             cpu_fraction = std::min(cpu_fraction, 1.0);
@@ -348,10 +343,9 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, const
             .affinity           = affinity});
     }
     std::ranges::sort(next.processes, compare_processes);
-    snapshot                  = std::move(next);
-    next_history.previous     = std::move(history);
-    next_history.sampled_at   = sample_timestamp_us;
-    next_history.sampled_wall = wall_clock_sample;
+    snapshot                = std::move(next);
+    next_history.previous   = std::move(history);
+    next_history.sampled_at = sample_timestamp;
     return true;
 }
 
@@ -366,19 +360,16 @@ bool top_sample(top_t& top, snapshot_t& snapshot, std::string& error)
     snapshot_t       threads;
     sample_history_t process_history;
     sample_history_t thread_history;
-    if (!sample_records(top, next, false, top.previous, top.sampled_at, top.sampled_wall, process_history, error) ||
-        !sample_records(top, threads, true, top.thread_previous, top.thread_sampled_at, top.thread_sampled_wall, thread_history, error))
+    if (!sample_records(top, next, false, top.previous, top.sampled_at, process_history, error) || !sample_records(top, threads, true, top.thread_previous, top.thread_sampled_at, thread_history, error))
     {
         return false;
     }
     std::ranges::sort(threads.processes, compare_threads);
-    next.threads            = std::move(threads.processes);
-    top.previous            = std::move(process_history.previous);
-    top.sampled_at          = process_history.sampled_at;
-    top.sampled_wall        = process_history.sampled_wall;
-    top.thread_previous     = std::move(thread_history.previous);
-    top.thread_sampled_at   = thread_history.sampled_at;
-    top.thread_sampled_wall = thread_history.sampled_wall;
-    snapshot                = std::move(next);
+    next.threads          = std::move(threads.processes);
+    top.previous          = std::move(process_history.previous);
+    top.sampled_at        = process_history.sampled_at;
+    top.thread_previous   = std::move(thread_history.previous);
+    top.thread_sampled_at = thread_history.sampled_at;
+    snapshot              = std::move(next);
     return true;
 }

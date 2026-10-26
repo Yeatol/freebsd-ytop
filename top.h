@@ -27,9 +27,9 @@
 
 #pragma once
 
-#include <sys/time.h>
 #include <sys/types.h>
 
+#include <chrono>
 #include <vector>
 #include <string>
 #include <stdint.h>
@@ -70,22 +70,20 @@ struct snapshot_t
 
 struct previous_process_t
 {
-    timeval  start;
-    uint64_t runtime_us;
-    uint64_t user_us;
-    uint64_t system_us;
+    std::chrono::steady_clock::time_point first_seen;
+    uint64_t                              runtime_us;
+    uint64_t                              user_us;
+    uint64_t                              system_us;
 };
 
 struct top_t
 {
-    __kvm*                                      kernel     = nullptr;
-    long                                        page_size  = 0;
-    int                                         fscale     = 0;
-    uint64_t                                    sampled_at = 0;
-    timeval                                     sampled_wall{};
+    __kvm*                                      kernel    = nullptr;
+    long                                        page_size = 0;
+    int                                         fscale    = 0;
+    std::chrono::steady_clock::time_point       sampled_at{};
     std::unordered_map<int, previous_process_t> previous;
-    uint64_t                                    thread_sampled_at = 0;
-    timeval                                     thread_sampled_wall{};
+    std::chrono::steady_clock::time_point       thread_sampled_at{};
     std::unordered_map<int, previous_process_t> thread_previous;
 };
 

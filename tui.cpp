@@ -31,6 +31,7 @@
 #include <sys/ioctl.h>
 
 #include <curses.h>
+#include <poll.h>
 #include <signal.h>
 #include <unistd.h>
 
@@ -143,7 +144,7 @@ static std::string process_line(const process_t& p, bool thread, const process_t
     return row;
 }
 
-static std::vector<display_row_t> lines(const snapshot_t& snapshot, const std::unordered_map<int, timeval>& expanded)
+static std::vector<display_row_t> lines(const snapshot_t& snapshot, const std::unordered_map<int, std::chrono::steady_clock::time_point>& expanded)
 {
     std::vector<display_row_t> result;
     result.reserve(1 + snapshot.processes.size());
@@ -215,7 +216,7 @@ static void move_selection(const std::vector<display_row_t>& output, int directi
     }
 }
 
-static void toggle_threads(std::unordered_map<int, timeval>& expanded, int pid, const timeval& start)
+static void toggle_threads(std::unordered_map<int, std::chrono::steady_clock::time_point>& expanded, int pid, std::chrono::steady_clock::time_point first_seen)
 {
     if (expanded.contains(pid))
     {
@@ -223,7 +224,7 @@ static void toggle_threads(std::unordered_map<int, timeval>& expanded, int pid, 
     }
     else
     {
-        expanded.emplace(pid, start);
+        expanded.emplace(pid, first_seen);
     }
 }
 
@@ -255,17 +256,19 @@ int tui(top_t& top)
                 error  = std::format("sigaction: {}", std::strerror(errno));
                 status = 1;
             }
-            snapshot_t                       snapshot;
-            int                              selected_pid  = -1;
-            lwpid_t                          selected_tid  = -1;
-            int                              scroll_offset = 0;
-            int                              pressed_pid        = -1;
-            lwpid_t                          pressed_tid        = -1;
-            bool                             toggle_on_release  = false;
-            std::unordered_map<int, timeval> expanded;
-            bool                             redraw      = true;
-            auto                             next_sample = std::chrono::steady_clock::now();
-            std::vector<display_row_t>       output;
+            snapshot_t snapshot;
+            int        selected_pid      = -1;
+            lwpid_t    selected_tid      = -1;
+            int        scroll_offset     = 0;
+            int        pressed_pid       = -1;
+            lwpid_t    pressed_tid       = -1;
+            bool       toggle_on_release = false;
+            bool       redraw            = true;
+            auto       next_sample       = std::chrono::steady_clock::now();
+
+            std::vector<display_row_t>                                     output;
+            std::unordered_map<int, std::chrono::steady_clock::time_point> expanded;
+
             while (status == 0 && !stopped)
             {
                 if (std::chrono::steady_clock::now() >= next_sample)
@@ -282,7 +285,7 @@ int tui(top_t& top)
                     for (auto it = expanded.begin(); it != expanded.end();)
                     {
                         auto process = top.previous.find(it->first);
-                        if (process == top.previous.end() || timercmp(&process->second.start, &it->second, !=))
+                        if (process == top.previous.end() || process->second.first_seen != it->second)
                         {
                             it = expanded.erase(it);
                         }
@@ -349,8 +352,20 @@ int tui(top_t& top)
                     }
                     redraw = false;
                 }
-                timeout(100);
-                int input_event = getch();
+                pollfd input_descriptor{.fd = STDIN_FILENO, .events = POLLIN};
+                int    input_ready = poll(&input_descriptor, 1, 100);
+                if (input_ready == -1 && errno != EINTR)
+                {
+                    error  = std::format("waiting for terminal input: {}", std::strerror(errno));
+                    status = 1;
+                    break;
+                }
+                int input_event = ERR;
+                if (input_ready > 0 && (input_descriptor.revents & POLLIN))
+                {
+                    timeout(100);
+                    input_event = getch();
+                }
                 if (stopped || input_event == 'q')
                 {
                     break;
@@ -371,20 +386,19 @@ int tui(top_t& top)
                     }
                     if (mouse.bstate & BUTTON1_PRESSED)
                     {
-                        pressed_pid        = -1;
-                        pressed_tid        = -1;
-                        toggle_on_release  = false;
+                        pressed_pid       = -1;
+                        pressed_tid       = -1;
+                        toggle_on_release = false;
                         if (mouse.y > 0 && mouse.y < visible_line_count && mouse.x >= 0 && mouse.x < width)
                         {
-                            const auto& pressed_row = output[mouse.y + scroll_offset];
-                            bool was_selected = selected_pid == pressed_row.pid &&
-                                                (pressed_row.thread ? selected_tid == pressed_row.tid : selected_tid == -1);
-                            pressed_pid       = pressed_row.pid;
-                            pressed_tid       = pressed_row.tid;
-                            toggle_on_release = was_selected && !pressed_row.thread && pressed_row.threads > 0;
-                            selected_pid      = pressed_row.pid;
-                            selected_tid      = pressed_row.thread ? pressed_row.tid : -1;
-                            redraw            = true;
+                            const auto& pressed_row  = output[mouse.y + scroll_offset];
+                            bool        was_selected = selected_pid == pressed_row.pid && (pressed_row.thread ? selected_tid == pressed_row.tid : selected_tid == -1);
+                            pressed_pid              = pressed_row.pid;
+                            pressed_tid              = pressed_row.tid;
+                            toggle_on_release        = was_selected && !pressed_row.thread && pressed_row.threads > 0;
+                            selected_pid             = pressed_row.pid;
+                            selected_tid             = pressed_row.thread ? pressed_row.tid : -1;
+                            redraw                   = true;
                         }
                     }
                     if (mouse.bstate & BUTTON1_RELEASED)
@@ -392,10 +406,9 @@ int tui(top_t& top)
                         if (toggle_on_release && mouse.y > 0 && mouse.y < visible_line_count && mouse.x >= 0 && mouse.x < width)
                         {
                             const auto& released_row = output[mouse.y + scroll_offset];
-                            if (!released_row.thread && released_row.pid == pressed_pid && released_row.tid == pressed_tid &&
-                                selected_pid == released_row.pid && selected_tid == -1)
+                            if (!released_row.thread && released_row.pid == pressed_pid && released_row.tid == pressed_tid && selected_pid == released_row.pid && selected_tid == -1)
                             {
-                                toggle_threads(expanded, released_row.pid, top.previous.at(released_row.pid).start);
+                                toggle_threads(expanded, released_row.pid, top.previous.at(released_row.pid).first_seen);
                                 output = lines(snapshot, expanded);
                                 redraw = true;
                             }
@@ -415,7 +428,7 @@ int tui(top_t& top)
                     auto expandable_process = std::ranges::find_if(snapshot.processes, [&](const process_t& p) { return p.pid == selected_pid && p.threads > 0; });
                     if (expandable_process != snapshot.processes.end())
                     {
-                        toggle_threads(expanded, selected_pid, top.previous.at(selected_pid).start);
+                        toggle_threads(expanded, selected_pid, top.previous.at(selected_pid).first_seen);
                         output = lines(snapshot, expanded);
                         redraw = true;
                     }
