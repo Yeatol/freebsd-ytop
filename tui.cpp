@@ -69,7 +69,7 @@ static bool screen_open(bool& active, int& cursor_visibility)
         return false;
     }
     mouseinterval(0);
-    mmask_t events = BUTTON1_PRESSED | BUTTON4_PRESSED | BUTTON5_PRESSED;
+    mmask_t events = BUTTON1_PRESSED | BUTTON1_RELEASED | BUTTON4_PRESSED | BUTTON5_PRESSED;
     return (mousemask(events, nullptr) & events) == events;
 }
 
@@ -259,6 +259,9 @@ int tui(top_t& top)
             int                              selected_pid  = -1;
             lwpid_t                          selected_tid  = -1;
             int                              scroll_offset = 0;
+            int                              pressed_pid        = -1;
+            lwpid_t                          pressed_tid        = -1;
+            bool                             toggle_on_release  = false;
             std::unordered_map<int, timeval> expanded;
             bool                             redraw      = true;
             auto                             next_sample = std::chrono::steady_clock::now();
@@ -366,17 +369,40 @@ int tui(top_t& top)
                         scroll_offset    = std::clamp(scroll_offset + scroll_delta, 0, max_offset);
                         redraw           = true;
                     }
-                    else if ((mouse.bstate & BUTTON1_PRESSED) && mouse.y > 0 && mouse.y < visible_line_count && mouse.x >= 0 && mouse.x < width)
+                    if (mouse.bstate & BUTTON1_PRESSED)
                     {
-                        const auto& clicked_row = output[mouse.y + scroll_offset];
-                        if (!clicked_row.thread && clicked_row.threads > 0 && selected_pid == clicked_row.pid && selected_tid == -1)
+                        pressed_pid        = -1;
+                        pressed_tid        = -1;
+                        toggle_on_release  = false;
+                        if (mouse.y > 0 && mouse.y < visible_line_count && mouse.x >= 0 && mouse.x < width)
                         {
-                            toggle_threads(expanded, clicked_row.pid, top.previous.at(clicked_row.pid).start);
+                            const auto& pressed_row = output[mouse.y + scroll_offset];
+                            bool was_selected = selected_pid == pressed_row.pid &&
+                                                (pressed_row.thread ? selected_tid == pressed_row.tid : selected_tid == -1);
+                            pressed_pid       = pressed_row.pid;
+                            pressed_tid       = pressed_row.tid;
+                            toggle_on_release = was_selected && !pressed_row.thread && pressed_row.threads > 0;
+                            selected_pid      = pressed_row.pid;
+                            selected_tid      = pressed_row.thread ? pressed_row.tid : -1;
+                            redraw            = true;
                         }
-                        selected_pid = clicked_row.pid;
-                        selected_tid = clicked_row.thread ? clicked_row.tid : -1;
-                        output       = lines(snapshot, expanded);
-                        redraw       = true;
+                    }
+                    if (mouse.bstate & BUTTON1_RELEASED)
+                    {
+                        if (toggle_on_release && mouse.y > 0 && mouse.y < visible_line_count && mouse.x >= 0 && mouse.x < width)
+                        {
+                            const auto& released_row = output[mouse.y + scroll_offset];
+                            if (!released_row.thread && released_row.pid == pressed_pid && released_row.tid == pressed_tid &&
+                                selected_pid == released_row.pid && selected_tid == -1)
+                            {
+                                toggle_threads(expanded, released_row.pid, top.previous.at(released_row.pid).start);
+                                output = lines(snapshot, expanded);
+                                redraw = true;
+                            }
+                        }
+                        pressed_pid       = -1;
+                        pressed_tid       = -1;
+                        toggle_on_release = false;
                     }
                 }
                 else if (input_event == KEY_UP || input_event == KEY_DOWN)
