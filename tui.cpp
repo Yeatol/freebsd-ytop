@@ -112,7 +112,7 @@ static std::string process_line(const process_t& p, bool thread, const process_t
     std::string threads = thread ? "-" : std::to_string(p.threads);
     std::string row     = std::format(
         "{:>5} {:>6} {:<10} {:>4} {:>3} {:>4} {:>7} {:>6} {:>6} "
-        "{:<6} {:>3} {:>6} {:>6.2f}% ",
+        "{:<6} {:>3} {:>6} {:>7.2f}% ",
         pid, p.tid, p.username.substr(0, 10), threads,
         p.priority, p.nice, memory(p.size_kb), memory(p.resident_kb),
         memory(p.swap_kb), p.state.substr(0, 6), cpu,
@@ -121,11 +121,11 @@ static std::string process_line(const process_t& p, bool thread, const process_t
     {
         if (percent.has_value())
         {
-            row += std::format("{:>6.2f}% ", *percent);
+            row += std::format("{:>7.2f}% ", *percent);
         }
         else
         {
-            row += std::format("{:>7} ", "-");
+            row += std::format("{:>8} ", "-");
         }
     }
     if (p.jid > 0)
@@ -148,7 +148,11 @@ static std::vector<display_row_t> lines(const snapshot_t& snapshot, const std::u
 {
     std::vector<display_row_t> result;
     result.reserve(1 + snapshot.processes.size());
-    result.push_back({"  PID    TID USERNAME    THR PRI NICE    SIZE    RES   SWAP STATE    C   TIME     CPU CPU_USR CPU_SYS COMMAND"});
+    result.push_back({std::format(
+        "{:>5} {:>6} {:<10} {:>4} {:>3} {:>4} {:>7} {:>6} {:>6} "
+        "{:<6} {:>3} {:>6} {:>8} {:>8} {:>8} {}",
+        "PID", "TID", "USERNAME", "THR", "PRI", "NICE", "SIZE", "RES",
+        "SWAP", "STATE", "C", "TIME", "CPU", "CPU_USR", "CPU_SYS", "COMMAND")});
     for (const auto& p : snapshot.processes)
     {
         auto expanded_process = expanded.find(p.pid);
