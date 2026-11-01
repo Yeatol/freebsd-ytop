@@ -28,7 +28,9 @@
 #pragma once
 
 #include <sys/types.h>
+#include <sys/dkstat.h>
 
+#include <array>
 #include <chrono>
 #include <vector>
 #include <string>
@@ -62,10 +64,19 @@ struct process_t
     std::string           affinity;
 };
 
+struct cpu_t
+{
+    int                         id = -1;
+    std::array<long, CPUSTATES> ticks{};
+    std::array<int, CPUSTATES>  percent_tenths{};
+};
+
 struct snapshot_t
 {
     std::vector<process_t> processes;
     std::vector<process_t> threads;
+    cpu_t                  cpu;
+    std::vector<cpu_t>     cpus;
 };
 
 struct previous_process_t
@@ -85,6 +96,9 @@ struct top_t
     std::unordered_map<int, previous_process_t> previous;
     std::chrono::steady_clock::time_point       thread_sampled_at{};
     std::unordered_map<int, previous_process_t> thread_previous;
+    int                                         max_cpus = 0;
+    std::array<long, CPUSTATES>                 previous_cpu_ticks{};
+    std::vector<std::array<long, CPUSTATES>>    previous_per_cpu_ticks;
 };
 
 bool top_open(top_t& top, std::string& error);

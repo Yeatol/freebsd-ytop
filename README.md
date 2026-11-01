@@ -148,6 +148,29 @@ from `CPU`.
 
 ## Code structure
 
+### System CPU sampling
+
+`top_sample` also collects whole-system and per-CPU data without changing the
+process-table UI. Like FreeBSD `top`, it sizes the per-CPU buffer using
+`kern.smp.maxcpus`, reads `kern.cp_times`, and omits CPU slots whose counters
+are all zero. `snapshot.cpus` retains the actual CPU IDs in ascending order,
+including gaps in numbering. `snapshot.cpu` is the separate whole-system
+summary read from `kern.cp_time`; its ID is `-1`.
+
+Each `cpu_t` contains raw cumulative `ticks` and `percent_tenths`, indexed by
+FreeBSD's `CP_USER`, `CP_NICE`, `CP_SYS`, `CP_INTR`, and `CP_IDLE` constants.
+For example, `percent_tenths[CP_SYS] == 123` means 12.3% system CPU.
+Percentages use FreeBSD `top`'s counter differences, counter-wrap handling,
+and integer rounding to tenths of a percent. Each CPU and the whole-system
+summary are normalized separately. The first sample compares with zero
+counters (proportions since boot); zero-change intervals yield zero percentages.
+Rounded percentages need not sum to exactly 100%.
+
+CPU histories are indexed by actual CPU ID, independently of process/thread
+histories, and are committed only after the entire sample succeeds. Sysctl
+errors, malformed counter sizes, and samples with no active CPUs are reported.
+`top_close` releases all histories. CPU sampling adds no disk I/O metrics.
+
 The code uses data-only structs and free functions, without custom classes or
 namespaces. Custom types use lowercase snake_case names ending in `_t`.
 File-local helpers use `static` linkage.
@@ -159,7 +182,7 @@ returning, including on errors.
 
 | Files | Responsibility |
 | --- | --- |
-| `top.cpp` / `top.h` | Process and thread sampling through `kvm_getprocs`, including per-thread context-switch counts, username lookup, and ascending PID sorting. |
+| `top.cpp` / `top.h` | Process and thread sampling through `kvm_getprocs`, including per-thread context-switch counts, username lookup, and ascending PID sorting; whole-system and per-CPU counters and percentages through sysctl. |
 | `tui.cpp` / `tui.h` | Curses rendering, signal handling, and refresh loop. |
 | `main.cpp` | Application startup and cleanup. |
 

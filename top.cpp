@@ -159,6 +159,15 @@ bool top_open(top_t& top, std::string& error)
         error = "invalid kernel CPU scaling values";
         return false;
     }
+    if (!read_integer("kern.smp.maxcpus", top.max_cpus, error))
+    {
+        return false;
+    }
+    if (top.max_cpus <= 0)
+    {
+        error = "kern.smp.maxcpus: invalid CPU count";
+        return false;
+    }
     return true;
 }
 
@@ -354,6 +363,81 @@ static bool compare_threads(const process_t& a, const process_t& b)
     return a.pid != b.pid ? a.pid < b.pid : a.tid < b.tid;
 }
 
+static std::array<int, CPUSTATES> cpu_percentages(const std::array<long, CPUSTATES>& current, const std::array<long, CPUSTATES>& previous)
+{
+    std::array<long, CPUSTATES> differences{};
+    long                        total = 0;
+    for (size_t i = 0; i < current.size(); ++i)
+    {
+        auto difference = static_cast<unsigned long>(current[i]) - static_cast<unsigned long>(previous[i]);
+        long change     = static_cast<long>(difference);
+        if (change < 0)
+        {
+            // Match FreeBSD top's counter-wrap handling.
+            change = static_cast<int>(difference);
+        }
+        differences[i] = change;
+        total += change;
+    }
+    if (total == 0)
+    {
+        total = 1;
+    }
+    std::array<int, CPUSTATES> result{};
+    long                       half_total = total / 2;
+    for (size_t i = 0; i < result.size(); ++i)
+    {
+        result[i] = static_cast<int>((differences[i] * 1000 + half_total) / total);
+    }
+    return result;
+}
+
+static bool sample_cpus(const top_t& top, snapshot_t& snapshot, std::vector<std::array<long, CPUSTATES>>& per_cpu_ticks, std::string& error)
+{
+    per_cpu_ticks.resize(top.max_cpus);
+    size_t size = per_cpu_ticks.size() * sizeof(per_cpu_ticks[0]);
+    if (sysctlbyname("kern.cp_times", per_cpu_ticks.data(), &size, nullptr, 0) == -1)
+    {
+        error = std::format("kern.cp_times: {}", std::strerror(errno));
+        return false;
+    }
+    if (size == 0 || size % sizeof(per_cpu_ticks[0]) != 0 || size > per_cpu_ticks.size() * sizeof(per_cpu_ticks[0]))
+    {
+        error = "kern.cp_times: unexpected sysctl value size";
+        return false;
+    }
+    per_cpu_ticks.resize(size / sizeof(per_cpu_ticks[0]));
+    const std::array<long, CPUSTATES> zero{};
+    for (size_t id = 0; id < per_cpu_ticks.size(); ++id)
+    {
+        const auto& ticks = per_cpu_ticks[id];
+        if (std::ranges::all_of(ticks, [](long value) { return value == 0; }))
+        {
+            continue;
+        }
+        const auto& previous = id < top.previous_per_cpu_ticks.size() ? top.previous_per_cpu_ticks[id] : zero;
+        snapshot.cpus.push_back(cpu_t{static_cast<int>(id), ticks, cpu_percentages(ticks, previous)});
+    }
+    if (snapshot.cpus.empty())
+    {
+        error = "kern.cp_times: no active CPUs";
+        return false;
+    }
+    size = sizeof(snapshot.cpu.ticks);
+    if (sysctlbyname("kern.cp_time", snapshot.cpu.ticks.data(), &size, nullptr, 0) == -1)
+    {
+        error = std::format("kern.cp_time: {}", std::strerror(errno));
+        return false;
+    }
+    if (size != sizeof(snapshot.cpu.ticks))
+    {
+        error = "kern.cp_time: unexpected sysctl value size";
+        return false;
+    }
+    snapshot.cpu.percent_tenths = cpu_percentages(snapshot.cpu.ticks, top.previous_cpu_ticks);
+    return true;
+}
+
 bool top_sample(top_t& top, snapshot_t& snapshot, std::string& error)
 {
     snapshot_t       next;
@@ -364,12 +448,19 @@ bool top_sample(top_t& top, snapshot_t& snapshot, std::string& error)
     {
         return false;
     }
+    std::vector<std::array<long, CPUSTATES>> per_cpu_ticks;
+    if (!sample_cpus(top, next, per_cpu_ticks, error))
+    {
+        return false;
+    }
     std::ranges::sort(threads.processes, compare_threads);
-    next.threads          = std::move(threads.processes);
-    top.previous          = std::move(process_history.previous);
-    top.sampled_at        = process_history.sampled_at;
-    top.thread_previous   = std::move(thread_history.previous);
-    top.thread_sampled_at = thread_history.sampled_at;
-    snapshot              = std::move(next);
+    next.threads               = std::move(threads.processes);
+    top.previous               = std::move(process_history.previous);
+    top.sampled_at             = process_history.sampled_at;
+    top.thread_previous        = std::move(thread_history.previous);
+    top.thread_sampled_at      = thread_history.sampled_at;
+    top.previous_cpu_ticks     = next.cpu.ticks;
+    top.previous_per_cpu_ticks = std::move(per_cpu_ticks);
+    snapshot                   = std::move(next);
     return true;
 }
