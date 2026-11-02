@@ -38,7 +38,6 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <algorithm>
-#include <unordered_map>
 
 static std::string memory(uint64_t kb)
 {
@@ -71,36 +70,59 @@ struct display_row_t
     int         threads = 0;
 };
 
-static std::string process_line(const process_t& p, bool thread, const process_t& command_source, bool show_context_switches = false)
+static std::string process_line(const process_t& p, bool thread, const process_t& command_source, bool show_context_switches = false, size_t affinity_width = 3)
 {
-    std::string pid     = std::to_string(p.pid);
-    std::string cpu     = p.cpu < 0 ? "-" : std::to_string(p.cpu);
-    std::string threads = thread ? "-" : std::to_string(p.threads);
-    std::string row     = std::format(
-        "{:>5} {:>6} {:<10} {:>4} {:>3} {:>4} {:>7} {:>6} {:>6} "
-        "{:<6} {:>3} {:>6} {:>8.2f}% ",
-        pid, p.tid, p.username.substr(0, 10), threads,
-        p.priority, p.nice, memory(p.size_kb), memory(p.resident_kb),
-        memory(p.swap_kb), p.state.substr(0, 6), cpu,
-        runtime(p.runtime_us), p.cpu_percent);
-    for (const auto& percent : {p.user_cpu_percent, p.system_cpu_percent})
+    std::string cpu = p.cpu < 0 ? "-" : std::to_string(p.cpu);
+    std::string row;
+    if (thread || show_context_switches)
     {
-        if (percent.has_value())
+        row += std::format("{:>6} ", p.tid);
+    }
+    else
+    {
+        row += std::format("{:>5} ", p.pid);
+        row += std::format("{:<10} ", p.username.substr(0, 10));
+        row += std::format("{:>4} ", p.threads);
+    }
+    row += std::format("{:>3} {:>4} ", p.priority, p.nice);
+    if (!thread && !show_context_switches)
+    {
+        row += std::format("{:>7} {:>6} ", memory(p.size_kb), memory(p.resident_kb));
+    }
+    if (!thread && !show_context_switches)
+    {
+        row += std::format("{:<6} {:>3} ", p.state.substr(0, 6), cpu);
+    }
+    else
+    {
+        row += std::format("{:<6} ", p.state.substr(0, 6));
+    }
+    row += std::format("{:>6} {:>8.2f}% ", runtime(p.runtime_us), p.cpu_percent);
+    if (thread || show_context_switches)
+    {
+        if (!p.kernel_process)
         {
-            row += std::format("{:>8.2f}% ", *percent);
+            for (const auto& percent : {p.user_cpu_percent, p.system_cpu_percent})
+            {
+                if (percent.has_value())
+                {
+                    row += std::format("{:>8.2f}% ", *percent);
+                }
+                else
+                {
+                    row += std::format("{:>9} ", "-");
+                }
+            }
         }
-        else
+        if (!p.kernel_process)
         {
-            row += std::format("{:>9} ", "-");
+            row += std::format("{:>{}} ", command_source.affinity.empty() ? "-" : command_source.affinity, affinity_width);
         }
+        row += std::format("{:>3} ", cpu);
     }
     if (p.jid > 0)
     {
         row += std::format("[jail:{}] ", p.jid);
-    }
-    if (!command_source.affinity.empty())
-    {
-        row += std::format("{} ", command_source.affinity);
     }
     row += command_source.command;
     if (thread || show_context_switches)
@@ -110,21 +132,78 @@ static std::string process_line(const process_t& p, bool thread, const process_t
     return row;
 }
 
-static std::vector<display_row_t> lines(const snapshot_t& snapshot, const std::unordered_map<int, std::chrono::steady_clock::time_point>& expanded)
+static std::vector<display_row_t> lines(const snapshot_t& snapshot, int detail_pid)
 {
     std::vector<display_row_t> result;
     result.reserve(1 + snapshot.processes.size());
-    result.push_back({std::format(
-        "{:>5} {:>6} {:<10} {:>4} {:>3} {:>4} {:>7} {:>6} {:>6} "
-        "{:<6} {:>3} {:>6} {:>9} {:>9} {:>9} {}",
-        "PID", "TID", "USERNAME", "THR", "PRI", "NICE", "SIZE", "RES",
-        "SWAP", "STATE", "C", "TIME", "CPU", "CPU_USR", "CPU_SYS", "COMMAND")});
+    bool   kernel_process = false;
+    size_t affinity_width = 3;
+    if (detail_pid != -1)
+    {
+        for (const auto& process : snapshot.processes)
+        {
+            if (process.pid == detail_pid)
+            {
+                kernel_process = process.kernel_process;
+                affinity_width = std::max(affinity_width, process.affinity.size());
+            }
+        }
+        for (const auto& thread : snapshot.threads)
+        {
+            if (thread.pid == detail_pid)
+            {
+                affinity_width = std::max(affinity_width, thread.affinity.size());
+            }
+        }
+    }
+    std::string header;
+    if (detail_pid != -1)
+    {
+        header += std::format("{:>6} ", "TID");
+    }
+    else
+    {
+        header += std::format("{:>5} ", "PID");
+        header += std::format("{:<10} ", "USERNAME");
+        header += std::format("{:>4} ", "THR");
+    }
+    header += std::format("{:>3} {:>4} ", "PRI", "NICE");
+    if (detail_pid == -1)
+    {
+        header += std::format("{:>7} {:>6} ", "SIZE", "RES");
+    }
+    if (detail_pid == -1)
+    {
+        header += std::format("{:<6} {:>3} ", "STATE", "C");
+    }
+    else
+    {
+        header += std::format("{:<6} ", "STATE");
+    }
+    header += std::format("{:>6} {:>9} ", "TIME", "CPU");
+    if (detail_pid != -1)
+    {
+        if (!kernel_process)
+        {
+            header += std::format("{:>9} {:>9} ", "UCPU", "SCPU");
+        }
+        if (!kernel_process)
+        {
+            header += std::format("{:>{}} ", "A", affinity_width);
+        }
+        header += std::format("{:>3} ", "C");
+    }
+    header += detail_pid == -1 ? "COMMAND" : "THREAD";
+    result.push_back({header});
     for (const auto& p : snapshot.processes)
     {
-        auto expanded_process = expanded.find(p.pid);
-        if (expanded_process == expanded.end())
+        if (detail_pid == -1)
         {
             result.push_back({process_line(p, false, p), p.pid, p.tid, false, p.threads});
+            continue;
+        }
+        if (p.pid != detail_pid)
+        {
             continue;
         }
 
@@ -136,12 +215,12 @@ static std::vector<display_row_t> lines(const snapshot_t& snapshot, const std::u
         {
             command_source = &*representative;
         }
-        result.push_back({process_line(p, false, *command_source, true), p.pid, p.tid, false, p.threads});
+        result.push_back({process_line(p, false, *command_source, true, affinity_width), p.pid, p.tid, false, p.threads});
         for (auto thread = thread_begin; thread != thread_end; ++thread)
         {
             if (thread->tid != p.tid)
             {
-                result.push_back({process_line(*thread, true, *thread), thread->pid, thread->tid, true, 1});
+                result.push_back({process_line(*thread, true, *thread, false, affinity_width), thread->pid, thread->tid, true, 1});
             }
         }
     }
@@ -183,18 +262,6 @@ static void move_selection(const std::vector<display_row_t>& output, int directi
     else if (selected_row_index > scroll_offset + visible_rows)
     {
         scroll_offset = selected_row_index - visible_rows;
-    }
-}
-
-static void toggle_threads(std::unordered_map<int, std::chrono::steady_clock::time_point>& expanded, int pid, std::chrono::steady_clock::time_point first_seen)
-{
-    if (expanded.contains(pid))
-    {
-        expanded.erase(pid);
-    }
-    else
-    {
-        expanded.emplace(pid, first_seen);
     }
 }
 
@@ -240,19 +307,57 @@ int tui(top_t& top)
         else
         {
             snapshot_t snapshot;
-            int        selected_pid      = -1;
-            lwpid_t    selected_tid      = -1;
-            int        scroll_offset     = 0;
-            int        pressed_pid       = -1;
-            lwpid_t    pressed_tid       = -1;
-            bool       toggle_on_release = false;
-            bool       redraw            = true;
-            auto       next_sample       = std::chrono::steady_clock::now();
+            int        selected_pid         = -1;
+            lwpid_t    selected_tid         = -1;
+            int        scroll_offset        = 0;
+            int        scroll_before_filter = 0;
+            int        filtered_pid         = -1;
+            int        pressed_pid          = -1;
+            lwpid_t    pressed_tid          = -1;
+            bool       toggle_on_release    = false;
+            bool       redraw               = true;
+            auto       next_sample          = std::chrono::steady_clock::now();
 
-            std::vector<display_row_t>                                     output;
-            std::vector<terminal_row_t>                                    frame;
-            terminal_row_t                                                 bar;
-            std::unordered_map<int, std::chrono::steady_clock::time_point> expanded;
+            std::vector<display_row_t>  output;
+            std::vector<display_row_t>  display_output;
+            std::vector<terminal_row_t> frame;
+            terminal_row_t              bar;
+            auto                        update_display_output = [&] {
+                display_output = output;
+            };
+            auto enter_detail = [&] {
+                if (filtered_pid != -1 || selected_pid == -1)
+                {
+                    return;
+                }
+                scroll_before_filter = scroll_offset;
+                scroll_offset        = 0;
+                filtered_pid         = selected_pid;
+                selected_pid         = -1;
+                selected_tid         = -1;
+                pressed_pid          = -1;
+                pressed_tid          = -1;
+                toggle_on_release    = false;
+                output               = lines(snapshot, filtered_pid);
+                update_display_output();
+                redraw = true;
+            };
+            auto exit_detail = [&](int visible_rows) {
+                selected_pid      = top.previous.contains(filtered_pid) ? filtered_pid : -1;
+                selected_tid      = -1;
+                filtered_pid      = -1;
+                scroll_offset     = scroll_before_filter;
+                pressed_pid       = -1;
+                pressed_tid       = -1;
+                toggle_on_release = false;
+                output            = lines(snapshot, filtered_pid);
+                update_display_output();
+                if (selected_pid != -1)
+                {
+                    move_selection(display_output, 0, visible_rows, selected_pid, selected_tid, scroll_offset);
+                }
+                redraw = true;
+            };
 
             while (status == 0 && !terminal_stopped())
             {
@@ -263,19 +368,7 @@ int tui(top_t& top)
                         status = 1;
                         break;
                     }
-                    for (auto it = expanded.begin(); it != expanded.end();)
-                    {
-                        auto process = top.previous.find(it->first);
-                        if (process == top.previous.end() || process->second.first_seen != it->second)
-                        {
-                            it = expanded.erase(it);
-                        }
-                        else
-                        {
-                            ++it;
-                        }
-                    }
-                    output = lines(snapshot, expanded);
+                    output = lines(snapshot, filtered_pid);
                     if (selected_pid != -1 && !std::ranges::any_of(output, [&](const display_row_t& row) {
                             return row.pid == selected_pid && (row.thread ? row.tid == selected_tid : selected_tid == -1);
                         }))
@@ -286,6 +379,7 @@ int tui(top_t& top)
                         pressed_tid       = -1;
                         toggle_on_release = false;
                     }
+                    update_display_output();
                     next_sample = std::chrono::steady_clock::now() + std::chrono::seconds(1);
                     redraw      = true;
                 }
@@ -298,7 +392,7 @@ int tui(top_t& top)
                 redraw                 = redraw || resized;
                 int height             = terminal.height;
                 int width              = terminal.width;
-                int total_rows         = static_cast<int>(output.size()) - 1;
+                int total_rows         = static_cast<int>(display_output.size()) - 1;
                 int table_width        = std::max(0, width - 1);
                 int visible_rows       = std::max(0, height - 1);
                 int max_offset         = std::max(0, total_rows - visible_rows);
@@ -330,8 +424,8 @@ int tui(top_t& top)
                             continue;
                         }
                         int  output_row_index = table_row == 0 ? 0 : table_row + scroll_offset;
-                        bool row_is_selected  = table_row > 0 && output[output_row_index].pid == selected_pid && (output[output_row_index].thread ? output[output_row_index].tid == selected_tid : selected_tid == -1);
-                        frame[row].text       = output[output_row_index].text;
+                        bool row_is_selected  = table_row > 0 && display_output[output_row_index].pid == selected_pid && (display_output[output_row_index].thread ? display_output[output_row_index].tid == selected_tid : selected_tid == -1);
+                        frame[row].text       = display_output[output_row_index].text;
                         frame[row].foreground = row_is_selected ? terminal_color_t::blue : terminal_color_t::normal;
                     }
                     if (!terminal_render(terminal, frame, error))
@@ -347,19 +441,13 @@ int tui(top_t& top)
                     status = 1;
                     break;
                 }
-                if (terminal_stopped() || (input.kind == terminal_event_kind_t::character && input.character == 'q'))
+                if (terminal_stopped() ||
+                    (input.kind == terminal_event_kind_t::character && input.character == 'q'))
                 {
                     break;
                 }
-                if (input.kind == terminal_event_kind_t::mouse_press || input.kind == terminal_event_kind_t::mouse_release ||
-                    input.kind == terminal_event_kind_t::wheel_up || input.kind == terminal_event_kind_t::wheel_down)
+                if (input.kind == terminal_event_kind_t::mouse_press || input.kind == terminal_event_kind_t::mouse_release)
                 {
-                    if (input.kind == terminal_event_kind_t::wheel_up || input.kind == terminal_event_kind_t::wheel_down)
-                    {
-                        int scroll_delta = input.kind == terminal_event_kind_t::wheel_up ? -3 : 3;
-                        scroll_offset    = std::clamp(scroll_offset + scroll_delta, 0, max_offset);
-                        redraw           = true;
-                    }
                     if (input.kind == terminal_event_kind_t::mouse_press)
                     {
                         pressed_pid       = -1;
@@ -367,29 +455,26 @@ int tui(top_t& top)
                         toggle_on_release = false;
                         if (input.y > 0 && input.y < visible_line_count && input.x >= 0 && input.x < table_width)
                         {
-                            const auto& pressed_row  = output[input.y + scroll_offset];
+                            const auto& pressed_row  = display_output[input.y + scroll_offset];
                             bool        was_selected = selected_pid == pressed_row.pid && (pressed_row.thread ? selected_tid == pressed_row.tid : selected_tid == -1);
                             pressed_pid              = pressed_row.pid;
                             pressed_tid              = pressed_row.tid;
-                            toggle_on_release        = was_selected && pressed_row.threads > 0;
+                            toggle_on_release        = was_selected && filtered_pid == -1;
                             selected_pid             = pressed_row.pid;
                             selected_tid             = pressed_row.thread ? pressed_row.tid : -1;
-                            redraw                   = true;
+                            update_display_output();
+                            redraw = true;
                         }
                     }
                     if (input.kind == terminal_event_kind_t::mouse_release)
                     {
                         if (toggle_on_release && input.y > 0 && input.y < visible_line_count && input.x >= 0 && input.x < table_width)
                         {
-                            const auto& released_row = output[input.y + scroll_offset];
+                            const auto& released_row = display_output[input.y + scroll_offset];
                             if (released_row.pid == pressed_pid && released_row.tid == pressed_tid && selected_pid == released_row.pid &&
                                 selected_tid == (released_row.thread ? released_row.tid : -1))
                             {
-                                toggle_threads(expanded, released_row.pid, top.previous.at(released_row.pid).first_seen);
-                                selected_tid = -1;
-                                output       = lines(snapshot, expanded);
-                                move_selection(output, 0, visible_rows, selected_pid, selected_tid, scroll_offset);
-                                redraw = true;
+                                enter_detail();
                             }
                         }
                         pressed_pid       = -1;
@@ -399,32 +484,41 @@ int tui(top_t& top)
                 }
                 else if (input.kind == terminal_event_kind_t::escape || input.kind == terminal_event_kind_t::mouse_right_press)
                 {
-                    selected_pid      = -1;
-                    selected_tid      = -1;
-                    pressed_pid       = -1;
-                    pressed_tid       = -1;
-                    toggle_on_release = false;
-                    redraw            = true;
+                    if (selected_pid == -1 && filtered_pid != -1)
+                    {
+                        exit_detail(visible_rows);
+                    }
+                    else
+                    {
+                        selected_pid      = -1;
+                        selected_tid      = -1;
+                        pressed_pid       = -1;
+                        pressed_tid       = -1;
+                        toggle_on_release = false;
+                        redraw            = true;
+                    }
                 }
                 else if (input.kind == terminal_event_kind_t::redraw)
                 {
                     redraw = true;
                 }
-                else if (input.kind == terminal_event_kind_t::up || input.kind == terminal_event_kind_t::down)
+                else if (input.kind == terminal_event_kind_t::up || input.kind == terminal_event_kind_t::down ||
+                         input.kind == terminal_event_kind_t::wheel_up || input.kind == terminal_event_kind_t::wheel_down)
                 {
-                    move_selection(output, input.kind == terminal_event_kind_t::up ? -1 : 1, visible_rows, selected_pid, selected_tid, scroll_offset);
+                    int direction = input.kind == terminal_event_kind_t::up || input.kind == terminal_event_kind_t::wheel_up ? -1 : 1;
+                    move_selection(display_output, direction, visible_rows, selected_pid, selected_tid, scroll_offset);
+                    update_display_output();
                     redraw = true;
                 }
                 else if (input.kind == terminal_event_kind_t::character && input.character == ' ')
                 {
-                    auto expandable_process = std::ranges::find_if(snapshot.processes, [&](const process_t& p) { return p.pid == selected_pid && p.threads > 0; });
-                    if (expandable_process != snapshot.processes.end())
+                    if (filtered_pid != -1)
                     {
-                        toggle_threads(expanded, selected_pid, top.previous.at(selected_pid).first_seen);
-                        selected_tid = -1;
-                        output       = lines(snapshot, expanded);
-                        move_selection(output, 0, visible_rows, selected_pid, selected_tid, scroll_offset);
-                        redraw = true;
+                        exit_detail(visible_rows);
+                    }
+                    else
+                    {
+                        enter_detail();
                     }
                 }
             }

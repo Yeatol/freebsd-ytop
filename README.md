@@ -40,15 +40,18 @@ Command-line arguments are ignored without a message.
 | Input | Action |
 | --- | --- |
 | `Up` / `Down` | Move the selection by one displayed row, including thread rows. Selection does not wrap; the list scrolls to keep it visible. With no selection, `Down` selects the first visible row and `Up` selects the last visible row. |
-| `Space` | For a selected multi-threaded process, expand or collapse its thread rows. For a selected single-threaded process, show or hide its main thread's context-switch counts. On a selected thread row, collapse its parent process and select the parent row, keeping it visible. Does nothing when nothing is selected. |
-| Left-click | Select a process or thread. Clicking the already selected process toggles its thread rows when it has more than one thread, or toggles its main thread's context-switch counts when it has one thread. Clicking an already selected thread collapses its parent process and selects the parent row, keeping it visible. Clicking the status bar, header, or blank space does not change the selection. |
-| Mouse wheel | Scroll three rows per step. Scrolling is bounded by the list and adjusted when rows disappear or collapse. |
-| `Esc` / Right-click | Clear the selection without collapsing expanded processes or changing the scroll position. |
-| `q` / `Ctrl+C` | Quit and restore the terminal. |
+| `Space` | Enter detail mode for the selected process, showing all its threads and clearing the selection. In detail mode, exit even with no selection. Exiting restores the process-only list and selects the target process, keeping it visible; if it has disappeared, selection stays cleared. Does nothing in the normal list with no selection. |
+| Left-click | Select a process or thread. In the normal list, clicking the already selected process enters detail mode. In detail mode, clicks only select rows and never collapse threads or exit the mode. Clicking the status bar, header, or blank space does not change the selection. |
+| Mouse wheel | Move the selection one displayed row per step, like `Up` / `Down`, including thread rows. The list scrolls to keep the selection visible, without wrapping. With no selection, scrolling down selects the first visible row and scrolling up selects the last visible row. |
+| `Esc` / Right-click | Clear an existing selection without changing the view or scroll position. With no selection in detail mode, return to the process list and select the target process as with `Space`. With no selection in the normal list, do nothing. |
+| `q` / `Ctrl+C` | Quit and restore the terminal from either mode. |
 
 Selection of a process or thread that disappears is cleared on the next sample.
-Other keyboard input is ignored. Terminal resizing is supported. Escape keys and
-incomplete mouse escape sequences do not exit the monitor. Partial reports are
+Process filtering stays active if the target disappears; only the header remains
+until `Space`, or `Esc` / right-click with no selection, exits detail mode,
+or the filtered PID appears again.
+All other keyboard input is ignored. Terminal resizing is supported.
+Incomplete mouse escape sequences do not exit the monitor. Partial reports are
 retained across input timeouts; a new escape sequence resynchronizes truncated
 reports. Mouse controls use
 SGR or legacy X10 reports; keyboard controls remain available on terminals
@@ -86,7 +89,9 @@ interrupts in yellow. Idle capacity above them is blank. Segment boundaries are
 rounded to the nearest cell using cumulative percentages, so very small segments
 may not be visible.
 The bar uses colored text on the default background without reverse video.
-The terminal must display UTF-8 U+2588 as a single-column character.
+If the active character locale cannot decode UTF-8 U+2588 as a single-column
+character, the bar uses ASCII `-` instead, with the same colors and proportions.
+Font glyph availability cannot be detected automatically.
 The first sample uses proportions since boot; subsequent samples use interval
 proportions. Intervals without CPU ticks leave the bar blank.
 The process table header stays fixed on the first line.
@@ -101,78 +106,88 @@ theme. Header and selection highlighting do not use reverse video.
 Foreground changes fully reset rendition before applying the color and any
 reverse-video attribute.
 
-Columns follow FreeBSD `top`, with a TID column after PID:
+Normal process-list columns follow FreeBSD `top`:
 
 1. PID
-2. TID
-3. Real username
-4. Thread count
-5. Priority
-6. Nice value
-7. Virtual memory (`SIZE`)
-8. Resident memory (`RES`)
-9. Swap usage (`SWAP`)
-10. State or wait channel (`STATE`)
-11. Current or last CPU (`C`), or `-` if unavailable
-12. Accumulated CPU time (`TIME`)
-13. Unweighted CPU percentage (`CPU`)
-14. User-mode CPU percentage (`CPU_USR`)
-15. Kernel-mode CPU percentage (`CPU_SYS`)
-16. Command name (`COMMAND`)
+2. Real username
+3. Thread count
+4. Priority
+5. Nice value
+6. Virtual memory (`SIZE`)
+7. Resident memory (`RES`)
+8. State or wait channel (`STATE`)
+9. Current or last CPU (`C`), or `-` if unavailable
+10. Accumulated CPU time (`TIME`)
+11. Unweighted CPU percentage (`CPU`)
+12. Command name (`COMMAND`)
+
+Detail mode replaces `PID` with `TID`, adds user-mode CPU percentage (`UCPU`)
+and kernel-mode CPU percentage (`SCPU`) after `CPU`, and omits `USERNAME`,
+`THR`, `SIZE`, and `RES`.
+For kernel processes, detail mode shows only `CPU`, omitting `UCPU` and
+`SCPU` from both the header and data rows. Kernel-process detail mode also
+omits affinity information.
+`STATE` immediately follows `NICE`, and `TIME` immediately precedes `CPU`.
+CPU percentage columns are followed by the user-thread affinity column `A`,
+then `C`, before the name column labeled `THREAD` instead of `COMMAND`.
 
 There is no separate JID column. Commands for processes and threads with
 `ki_jid > 0` are prefixed with `[jail:ID] `; host processes (`ki_jid == 0`) have
 no jail prefix.
 
-### Threads and expansion
+### Threads and detail mode
 
-Collapsed processes have one row, and `THR` shows the total thread count. The
-TID on that row is `ki_tid` of the representative thread returned by
-`kvm_getprocs(KERN_PROC_PROC)`.
+In the normal list, each process has one row, and `THR` shows the total thread
+count. The normal list does not display `TID`. In detail mode, the parent row's
+TID is `ki_tid` of the representative thread returned by `kvm_getprocs(KERN_PROC_PROC)`.
 
-Expand a process to show its threads underneath it. Expanded rows are obtained
+Detail mode shows only the target process and its threads underneath it. Thread rows are obtained
 from `kvm_getprocs(KERN_PROC_ALL)` and are sorted by TID within each process.
+Detail mode omits the `THR` column from the header and all rows.
 The TID already shown on the parent row is omitted from the child rows. Thread
-rows show their parent process's PID in the PID column and can be selected
-without toggling the parent.
-Multiple processes can remain expanded at once. Expansion persists across
-refreshes and is cleared when a process disappears from a sample or its
-accumulated runtime decreases. PID reuse between samples is not detected if
-the new process's accumulated runtime is at least that of the previous process.
+rows can be selected without toggling the parent. The PID column is not shown
+in detail mode. There is no separate thread expansion or collapse.
+The detail-mode PID persists across refreshes and selection changes until
+`Space`, or `Esc` / right-click with no selection, returns to the normal list.
+`Tab` is ignored.
 
-Expanded rows show per-thread state, runtime, CPU usage, and thread names.
-Thread COMMAND uses `process_name{thread_name}`, omitting the braces and thread
-name when both names are identical. Unnamed threads use `process_name{}`.
+Detail-mode thread rows show per-thread state, runtime, CPU usage, and thread names.
+`THREAD` shows the thread name directly, falling back to the process name
+when the thread name is empty.
 
-While expanded, the parent COMMAND also uses the thread name matching its
+In detail mode, the parent `THREAD` also uses the thread name matching its
 displayed TID; other parent columns retain process-wide values. The parent and
-each displayed thread append that thread's cumulative voluntary and involuntary
-context-switch counts in the form `(nivcsw=N, nvcsw=N)`. These values come from
+each displayed thread show cumulative involuntary and voluntary context-switch
+counts appended to `THREAD` as `(nivcsw=N, nvcsw=N)`. These are
+cumulative counts, not rates. They come from
 `ki_rusage.ru_nivcsw` and `ki_rusage.ru_nvcsw`, respectively. For a
-single-threaded process, `Space` or clicking the selected process toggles the
-parent's counts without adding a thread row. If the representative thread
+single-threaded process, detail mode shows the parent's counts without adding
+a thread row. If the representative thread
 disappears between the two kernel queries, the parent keeps the process name
-and process counters until a matching sample is available. Collapsing restores
+and process counters until a matching sample is available. Exiting detail mode restores
 the process name and hides the counts.
 
-Expanded rows, including the parent row's representative TID, prefix COMMAND
-with the thread's effective CPU affinity. For example:
+User-process detail-mode rows, including the parent row's representative TID,
+show the thread's cpuset CPU mask in a separate `A` column before `C`, using
+comma-separated CPU numbers without a prefix or brackets. Its width adjusts
+to fit all displayed masks, with a minimum width of three and right alignment
+for both the header and values. For example:
 
 ```text
-[CPU0] process{thread} (nivcsw=N, nvcsw=N)
-[jail:69] [CPU0,2,3] process{thread} (nivcsw=N, nvcsw=N)
+    A   C THREAD
+    0   0 thread (nivcsw=12, nvcsw=345)
+0,2,3   2 [jail:69] thread (nivcsw=67, nvcsw=8901)
 ```
 
-Masks equal to the monitor's root CPU set are omitted. Inherited process or jail
-restrictions and kernel thread bindings are included. The affinity indicates
-allowed CPUs, not the current CPU shown in the `C` column. An explicit binding
+Masks equal to the monitor's root CPU set show `-` in `A`. Inherited process or jail
+restrictions are included. Scheduler-level kernel thread bindings are not
+represented by this cpuset mask, so kernel-process detail mode omits affinity.
+The affinity indicates allowed CPUs, not the current CPU shown in the `C` column. An explicit binding
 to all available CPUs is indistinguishable from no restriction. Affinity lookup
 errors are reported; threads that exit during lookup are skipped.
 
-Thread memory columns refer to shared process memory. SWAP follows the
-reference `top` formula: `max(ki_swrss - ki_rssize, 0)` pages, converted to the
-same K/M/G units as SIZE and RES. Thread SWAP is also shared process memory,
-not an additional per-thread allocation.
+Memory columns (`SIZE` and `RES`) are shown only in the normal process list.
+Swap usage is not displayed.
 
 ### CPU accounting
 
@@ -184,23 +199,23 @@ The first snapshot uses the kernel CPU estimate; later snapshots use runtime
 differences without process-age weighting. A multi-threaded process can exceed
 100%.
 
-For user processes, `CPU_USR` and `CPU_SYS` use differences in
+For user processes, `UCPU` and `SCPU` use differences in
 `ki_rusage.ru_utime` and `ki_rusage.ru_stime`, divided by elapsed sample time.
-For kernel processes (`P_KPROC`) and their threads, `CPU_USR` is shown as `-`
-and `CPU_SYS` equals `CPU`; kernel CPU is not split using rusage time
-differences. A value of 100% represents one CPU. Parent rows retain process
-totals when expanded; child rows use per-thread accounting. These rates are
+For kernel processes (`P_KPROC`) and their threads, only `CPU` is displayed;
+kernel CPU is not split using rusage time differences.
+A value of 100% represents one CPU. Parent rows retain process
+totals in detail mode; child rows use per-thread accounting. These rates are
 not normalized to sum to 100%.
 
-For user processes, the first sample displays `0.00%` in `CPU_USR` and `CPU_SYS`
+For user processes, the first sample displays `0.00%` in `UCPU` and `SCPU`
 until interval measurements are available; `CPU` uses the kernel estimate.
 On later samples, records with no previous entry
 or decreased accumulated runtime are treated as new instances: their
 accumulated CPU times are divided by the sample interval. For records treated
 as the same instance, if either user-mode or kernel-mode time decreases,
-both `CPU_USR` and `CPU_SYS` show `-`. Sample intervals are measured using
+both `UCPU` and `SCPU` show `-`. Sample intervals are measured using
 `std::chrono::steady_clock`. Kernel accounting resolution and separately accounted
-interrupt time can cause user-process `CPU_USR` + `CPU_SYS` to differ slightly
+interrupt time can cause user-process `UCPU` + `SCPU` to differ slightly
 from `CPU`.
 
 ## Code structure

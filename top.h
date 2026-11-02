@@ -45,6 +45,7 @@ struct process_t
     int                   pid;
     lwpid_t               tid;
     int                   jid;
+    bool                  kernel_process;
     std::string           username;
     int                   threads;
     int                   priority;

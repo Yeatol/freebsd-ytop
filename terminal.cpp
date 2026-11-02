@@ -366,6 +366,11 @@ bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& ro
     auto& output = terminal.output;
     frame.resize(static_cast<size_t>(terminal.height));
     output.clear();
+    mbstate_t   block_state{};
+    wchar_t     block_character = 0;
+    const bool  unicode_block   = std::mbrtowc(&block_character, "\u2588", 3, &block_state) == 3 &&
+                                  block_character == L'\u2588' && wcwidth(block_character) == 1;
+    const char* bar_character   = unicode_block ? "\u2588" : "-";
     if (terminal.synchronized_output)
     {
         output += "\033[?2026h";
@@ -447,7 +452,7 @@ bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& ro
                 for (auto color : line.right_bar)
                 {
                     set_foreground(output, color, foreground, reverse);
-                    output += color == terminal_color_t::normal ? " " : "\u2588";
+                    output += color == terminal_color_t::normal ? " " : bar_character;
                 }
             }
             else

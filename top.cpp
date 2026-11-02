@@ -250,12 +250,8 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, const
                 {
                     if (CPU_ISSET(cpu, &mask))
                     {
-                        std::format_to(std::back_inserter(affinity), "{}{}", affinity.empty() ? "[CPU" : ",", cpu);
+                        std::format_to(std::back_inserter(affinity), "{}{}", affinity.empty() ? "" : ",", cpu);
                     }
-                }
-                if (!affinity.empty())
-                {
-                    affinity += "]";
                 }
             }
         }
@@ -324,9 +320,9 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, const
         if (threads)
         {
             std::string thread_name = std::format("{}{}", text(p.ki_tdname, sizeof(p.ki_tdname)), text(p.ki_moretdname, sizeof(p.ki_moretdname)));
-            if (thread_name != command)
+            if (!thread_name.empty())
             {
-                command = std::format("{}{{{}}}", command, thread_name);
+                command = thread_name;
             }
         }
         if (!threads && !(p.ki_flag & P_INMEM))
@@ -341,6 +337,7 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, const
             .pid                = p.ki_pid,
             .tid                = p.ki_tid,
             .jid                = p.ki_jid,
+            .kernel_process     = kernel_process,
             .username           = username_entry->second,
             .threads            = p.ki_numthreads,
             .priority           = p.ki_pri.pri_level - PUSER,

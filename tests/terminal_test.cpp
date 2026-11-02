@@ -232,7 +232,7 @@ static void apply_output(test_screen_t& screen, std::string_view output)
             if (ch == 0xe2 && output.substr(i - 1, 3) == "\u2588")
             {
                 i += 2;
-                ch = '#';
+                ch = '-';
             }
             check(ch >= 32 && ch < 127, "ASCII screen emulator receives printable text");
             size_t cell = static_cast<size_t>(screen.y * screen.width + screen.x);
@@ -331,7 +331,7 @@ static void expect_screen(const test_screen_t& screen, const std::vector<termina
             auto bar_color = right_bar ? rows[y].right_bar[static_cast<size_t>(x - bar_start)] : terminal_color_t::normal;
             if (right_bar)
             {
-                expected = bar_color == terminal_color_t::normal ? ' ' : '#';
+                expected = bar_color == terminal_color_t::normal ? ' ' : '-';
             }
             check(screen.text[cell] == expected, "rendered cell matches complete frame");
             check(screen.styles[cell] == (present && rows[y].reverse), "rendered style matches complete frame");
@@ -436,6 +436,15 @@ static void test_differential_render(terminal_t& terminal, int master)
     auto squares = render();
     check(squares.find("\u2588") != std::string::npos, "right CPU bar emits UTF-8 full blocks");
     check(render().empty(), "unchanged right CPU bar emits no bytes");
+    check(std::setlocale(LC_CTYPE, "C") != nullptr, "select ASCII locale");
+    terminal.previous.clear();
+    auto ascii_bar = render();
+    check(ascii_bar.find('-') != std::string::npos && ascii_bar.find("\u2588") == std::string::npos,
+          "right CPU bar falls back to ASCII in C locale");
+    check(render().empty(), "unchanged ASCII CPU bar emits no bytes");
+    check(std::setlocale(LC_CTYPE, "C.UTF-8") != nullptr, "restore UTF-8 locale");
+    terminal.previous.clear();
+    check(render().find("\u2588") != std::string::npos, "UTF-8 CPU bar remains supported");
     rows[1].right_bar = {terminal_color_t::normal};
     rows[2].right_bar = {terminal_color_t::red};
     rows[3].text.clear();
