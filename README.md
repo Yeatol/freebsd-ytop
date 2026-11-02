@@ -50,7 +50,7 @@ the terminal.
 | `Up` / `Down` | Move the selection by one displayed row, including thread rows. Selection does not wrap; the list scrolls to keep it visible. With no selection, `Down` selects the first visible row and `Up` selects the last visible row. |
 | `Space` | Enter detail mode for the selected process, showing all its threads and clearing the selection. In detail mode, exit even with no selection. Exiting restores the process-only list and selects the target process, keeping it visible; if it has disappeared, selection stays cleared. Does nothing in the normal list with no selection. |
 | Left-click | Select a process or thread. In the normal list, clicking the already selected process enters detail mode. In detail mode, clicks only select rows and never collapse threads or exit the mode. Clicking the status bar, header, or blank space does not change the selection. |
-| Mouse wheel | Move the selection one displayed row per step, like `Up` / `Down`, including thread rows. The list scrolls to keep the selection visible, without wrapping. With no selection, scrolling down selects the first visible row and scrolling up selects the last visible row. |
+| Mouse wheel | With a selection, move it one displayed row per wheel step, like `Up` / `Down`, including thread rows; the list scrolls to keep it visible, without wrapping. With no selection, scroll the list three displayed rows per wheel step without selecting a row. |
 | `Esc` / Right-click | Clear an existing selection without changing the view or scroll position. With no selection in detail mode, return to the process list and select the target process as with `Space`. With no selection in the normal list, do nothing. |
 | `q` / `Ctrl+C` | Quit and restore the terminal from either mode. |
 

@@ -331,6 +331,17 @@ static void move_selection(const std::vector<display_row_t>& output, int directi
     }
 }
 
+static void scroll_view(const std::vector<display_row_t>& output, int direction, int visible_rows, int& scroll_offset)
+{
+    int total_rows = static_cast<int>(output.size()) - 1;
+    if (total_rows <= 0 || visible_rows <= 0)
+    {
+        return;
+    }
+    int max_offset = std::max(0, total_rows - visible_rows);
+    scroll_offset  = std::clamp(scroll_offset + direction * 3, 0, max_offset);
+}
+
 static terminal_row_t cpu_line(const cpu_t& cpu, int cells = 10)
 {
     terminal_row_t row;
@@ -720,7 +731,15 @@ int tui(top_t& top)
                          input.kind == terminal_event_kind_t::wheel_up || input.kind == terminal_event_kind_t::wheel_down)
                 {
                     int direction = input.kind == terminal_event_kind_t::up || input.kind == terminal_event_kind_t::wheel_up ? -1 : 1;
-                    move_selection(display_output, direction, layout.visible_rows, state.selected_pid, state.selected_tid, state.scroll_offset);
+                    if ((input.kind == terminal_event_kind_t::wheel_up || input.kind == terminal_event_kind_t::wheel_down) &&
+                        state.selected_pid == -1)
+                    {
+                        scroll_view(display_output, direction, layout.visible_rows, state.scroll_offset);
+                    }
+                    else
+                    {
+                        move_selection(display_output, direction, layout.visible_rows, state.selected_pid, state.selected_tid, state.scroll_offset);
+                    }
                     redraw = true;
                 }
                 else if (input.kind == terminal_event_kind_t::character && input.character == ' ')

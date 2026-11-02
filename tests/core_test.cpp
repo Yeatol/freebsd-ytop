@@ -194,6 +194,24 @@ static void test_selection()
     check(tid == 109, "zero-height table preserves selection");
     move_selection(lines(snapshot, 99), 1, 3, pid, tid, scroll);
     check(tid == 109, "empty table does not index a data row");
+    pid = -1;
+    tid = -1;
+    scroll = 0;
+    scroll_view(rows, -1, 3, scroll);
+    check(scroll == 0, "view scrolling stops at the first row");
+    scroll_view(rows, 1, 3, scroll);
+    check(scroll == 3 && pid == -1 && tid == -1, "scrolling without selection moves the view three rows without selecting a row");
+    for (int i = 0; i < 20; ++i)
+    {
+        scroll_view(rows, 1, 3, scroll);
+    }
+    check(scroll == 9 && pid == -1 && tid == -1, "view scrolling stops at the last row without selecting");
+    scroll_view(rows, -1, 3, scroll);
+    check(scroll == 6, "view scrolling moves up three rows");
+    scroll_view(rows, -1, 0, scroll);
+    check(scroll == 6, "zero-height table preserves view position");
+    scroll_view(lines(snapshot, 99), 1, 3, scroll);
+    check(scroll == 6, "empty table preserves view position");
 }
 
 static void cpu_fixture(std::vector<cpu_t>& cpus, int count)
