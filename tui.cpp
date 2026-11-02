@@ -27,52 +27,16 @@
 
 #include "tui.h"
 #include "top.h"
-
-#include <sys/ioctl.h>
-
-#include <curses.h>
-#include <poll.h>
-#include <signal.h>
-#include <unistd.h>
+#include "terminal.h"
 
 #include <stdio.h>
-#include <cerrno>
 #include <chrono>
 #include <format>
 #include <string>
 #include <vector>
-#include <cstring>
 #include <stddef.h>
 #include <algorithm>
 #include <unordered_map>
-
-static volatile sig_atomic_t stopped = 0;
-
-static void stop(int)
-{
-    stopped = 1;
-}
-
-static bool screen_open(bool& active, int& cursor_visibility)
-{
-    active = initscr() != nullptr;
-    if (!active)
-    {
-        return false;
-    }
-    if (cbreak() == ERR || noecho() == ERR || keypad(stdscr, TRUE) == ERR)
-    {
-        return false;
-    }
-    cursor_visibility = curs_set(0);
-    if (cursor_visibility == ERR)
-    {
-        return false;
-    }
-    mouseinterval(0);
-    mmask_t events = BUTTON1_PRESSED | BUTTON1_RELEASED | BUTTON4_PRESSED | BUTTON5_PRESSED;
-    return (mousemask(events, nullptr) & events) == events;
-}
 
 static std::string memory(uint64_t kb)
 {
@@ -234,32 +198,16 @@ static void toggle_threads(std::unordered_map<int, std::chrono::steady_clock::ti
 
 int tui(top_t& top)
 {
-    if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO))
-    {
-        fprintf(stderr, "ytop: an interactive terminal is required\n");
-        return 1;
-    }
-    stopped = 0;
     std::string error;
     int         status = 0;
     {
-        bool screen_active     = false;
-        int  cursor_visibility = ERR;
-        if (!screen_open(screen_active, cursor_visibility))
+        terminal_t terminal;
+        if (!terminal_open(terminal, error))
         {
-            error  = "cannot initialize terminal with mouse support and hidden cursor";
             status = 1;
         }
         else
         {
-            struct sigaction action{};
-            action.sa_handler = stop;
-            sigemptyset(&action.sa_mask);
-            if (sigaction(SIGINT, &action, nullptr) == -1 || sigaction(SIGTERM, &action, nullptr) == -1 || sigaction(SIGHUP, &action, nullptr) == -1)
-            {
-                error  = std::format("sigaction: {}", std::strerror(errno));
-                status = 1;
-            }
             snapshot_t snapshot;
             int        selected_pid      = -1;
             lwpid_t    selected_tid      = -1;
@@ -273,7 +221,7 @@ int tui(top_t& top)
             std::vector<display_row_t>                                     output;
             std::unordered_map<int, std::chrono::steady_clock::time_point> expanded;
 
-            while (status == 0 && !stopped)
+            while (status == 0 && !terminal_stopped())
             {
                 if (std::chrono::steady_clock::now() >= next_sample)
                 {
@@ -302,26 +250,15 @@ int tui(top_t& top)
                     next_sample = std::chrono::steady_clock::now() + std::chrono::seconds(1);
                     redraw      = true;
                 }
-                winsize size{};
-                if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == -1)
+                bool resized = false;
+                if (!terminal_size(terminal, resized, error))
                 {
-                    error  = std::format("reading terminal size: {}", std::strerror(errno));
                     status = 1;
                     break;
                 }
-                if (size.ws_row != 0 && size.ws_col != 0 && is_term_resized(size.ws_row, size.ws_col))
-                {
-                    if (resizeterm(size.ws_row, size.ws_col) == ERR)
-                    {
-                        error  = "cannot resize terminal";
-                        status = 1;
-                        break;
-                    }
-                    redraw = true;
-                }
-                int height = 0;
-                int width  = 0;
-                getmaxyx(stdscr, height, width);
+                redraw                 = redraw || resized;
+                int height             = terminal.height;
+                int width              = terminal.width;
                 int total_rows         = static_cast<int>(output.size()) - 1;
                 int visible_rows       = std::max(0, height - 1);
                 int max_offset         = std::max(0, total_rows - visible_rows);
@@ -329,73 +266,48 @@ int tui(top_t& top)
                 int visible_line_count = std::min(visible_rows, total_rows - scroll_offset) + 1;
                 if (redraw)
                 {
-                    erase();
+                    std::vector<terminal_row_t> frame;
+                    frame.reserve(static_cast<size_t>(visible_line_count));
                     for (int row = 0; row < visible_line_count; ++row)
                     {
                         int  output_row_index = row == 0 ? 0 : row + scroll_offset;
                         bool row_is_selected  = row > 0 && output[output_row_index].pid == selected_pid && (output[output_row_index].thread ? output[output_row_index].tid == selected_tid : selected_tid == -1);
-                        if (row == 0 || row_is_selected)
-                        {
-                            attron(A_REVERSE);
-                        }
-                        if (row == 0 || row_is_selected)
-                        {
-                            mvhline(row, 0, ' ', width);
-                        }
-                        mvaddnstr(row, 0, output[output_row_index].text.c_str(), std::max(0, width - 1));
-                        if (row == 0 || row_is_selected)
-                        {
-                            attroff(A_REVERSE);
-                        }
+                        frame.push_back({output[output_row_index].text, row == 0 || row_is_selected});
                     }
-                    if (refresh() == ERR)
+                    if (!terminal_render(terminal, frame, error))
                     {
-                        error  = "cannot refresh terminal";
                         status = 1;
                         break;
                     }
                     redraw = false;
                 }
-                pollfd input_descriptor{.fd = STDIN_FILENO, .events = POLLIN};
-                int    input_ready = poll(&input_descriptor, 1, 100);
-                if (input_ready == -1 && errno != EINTR)
+                terminal_event_t input;
+                if (!terminal_read(terminal, input, 100, error))
                 {
-                    error  = std::format("waiting for terminal input: {}", std::strerror(errno));
                     status = 1;
                     break;
                 }
-                int input_event = ERR;
-                if (input_ready > 0 && (input_descriptor.revents & POLLIN))
-                {
-                    timeout(100);
-                    input_event = getch();
-                }
-                if (stopped || input_event == 'q')
+                if (terminal_stopped() || (input.kind == terminal_event_kind_t::character && input.character == 'q'))
                 {
                     break;
                 }
-                if (input_event == KEY_MOUSE)
+                if (input.kind == terminal_event_kind_t::mouse_press || input.kind == terminal_event_kind_t::mouse_release ||
+                    input.kind == terminal_event_kind_t::wheel_up || input.kind == terminal_event_kind_t::wheel_down)
                 {
-                    MEVENT mouse{};
-                    if (getmouse(&mouse) == ERR)
+                    if (input.kind == terminal_event_kind_t::wheel_up || input.kind == terminal_event_kind_t::wheel_down)
                     {
-                        // KEY_MOUSE may have no decoded report after an incomplete escape sequence.
-                        continue;
-                    }
-                    if (mouse.bstate & (BUTTON4_PRESSED | BUTTON5_PRESSED))
-                    {
-                        int scroll_delta = (mouse.bstate & BUTTON4_PRESSED) ? -3 : 3;
+                        int scroll_delta = input.kind == terminal_event_kind_t::wheel_up ? -3 : 3;
                         scroll_offset    = std::clamp(scroll_offset + scroll_delta, 0, max_offset);
                         redraw           = true;
                     }
-                    if (mouse.bstate & BUTTON1_PRESSED)
+                    if (input.kind == terminal_event_kind_t::mouse_press)
                     {
                         pressed_pid       = -1;
                         pressed_tid       = -1;
                         toggle_on_release = false;
-                        if (mouse.y > 0 && mouse.y < visible_line_count && mouse.x >= 0 && mouse.x < width)
+                        if (input.y > 0 && input.y < visible_line_count && input.x >= 0 && input.x < width)
                         {
-                            const auto& pressed_row  = output[mouse.y + scroll_offset];
+                            const auto& pressed_row  = output[input.y + scroll_offset];
                             bool        was_selected = selected_pid == pressed_row.pid && (pressed_row.thread ? selected_tid == pressed_row.tid : selected_tid == -1);
                             pressed_pid              = pressed_row.pid;
                             pressed_tid              = pressed_row.tid;
@@ -405,11 +317,11 @@ int tui(top_t& top)
                             redraw                   = true;
                         }
                     }
-                    if (mouse.bstate & BUTTON1_RELEASED)
+                    if (input.kind == terminal_event_kind_t::mouse_release)
                     {
-                        if (toggle_on_release && mouse.y > 0 && mouse.y < visible_line_count && mouse.x >= 0 && mouse.x < width)
+                        if (toggle_on_release && input.y > 0 && input.y < visible_line_count && input.x >= 0 && input.x < width)
                         {
-                            const auto& released_row = output[mouse.y + scroll_offset];
+                            const auto& released_row = output[input.y + scroll_offset];
                             if (!released_row.thread && released_row.pid == pressed_pid && released_row.tid == pressed_tid && selected_pid == released_row.pid && selected_tid == -1)
                             {
                                 toggle_threads(expanded, released_row.pid, top.previous.at(released_row.pid).first_seen);
@@ -422,12 +334,16 @@ int tui(top_t& top)
                         toggle_on_release = false;
                     }
                 }
-                else if (input_event == KEY_UP || input_event == KEY_DOWN)
+                else if (input.kind == terminal_event_kind_t::redraw)
                 {
-                    move_selection(output, input_event == KEY_UP ? -1 : 1, visible_rows, selected_pid, selected_tid, scroll_offset);
                     redraw = true;
                 }
-                else if (input_event == ' ' && selected_tid == -1)
+                else if (input.kind == terminal_event_kind_t::up || input.kind == terminal_event_kind_t::down)
+                {
+                    move_selection(output, input.kind == terminal_event_kind_t::up ? -1 : 1, visible_rows, selected_pid, selected_tid, scroll_offset);
+                    redraw = true;
+                }
+                else if (input.kind == terminal_event_kind_t::character && input.character == ' ' && selected_tid == -1)
                 {
                     auto expandable_process = std::ranges::find_if(snapshot.processes, [&](const process_t& p) { return p.pid == selected_pid && p.threads > 0; });
                     if (expandable_process != snapshot.processes.end())
@@ -437,39 +353,17 @@ int tui(top_t& top)
                         redraw = true;
                     }
                 }
-                else if (input_event == KEY_RESIZE)
-                {
-                    redraw = true;
-                }
             }
         }
-        if (screen_active)
+        std::string close_error;
+        if (!terminal_close(terminal, close_error))
         {
-            mousemask(0, nullptr);
-            if (attrset(A_NORMAL) == ERR || move(getmaxy(stdscr) - 1, 0) == ERR || clrtoeol() == ERR || refresh() == ERR)
+            if (!error.empty())
             {
-                if (error.empty())
-                {
-                    error = "cannot clear terminal exit line";
-                }
-                status = 1;
+                error += "; ";
             }
-            if (cursor_visibility != ERR && curs_set(cursor_visibility) == ERR)
-            {
-                if (error.empty())
-                {
-                    error = "cannot restore cursor visibility";
-                }
-                status = 1;
-            }
-            if (endwin() == ERR)
-            {
-                if (error.empty())
-                {
-                    error = "cannot restore terminal";
-                }
-                status = 1;
-            }
+            error += close_error;
+            status = 1;
         }
     }
     if (!error.empty())

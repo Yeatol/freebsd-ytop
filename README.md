@@ -3,7 +3,8 @@
 [![FreeBSD port version](https://repology.org/badge/version-for-repo/freebsd/ytop.svg)](https://www.freshports.org/sysutils/ytop/)
 
 A minimal process monitor for FreeBSD, written in C++23. It uses FreeBSD's
-base-system compiler, `libkvm`, and `ncurses`.
+base-system compiler and `libkvm`, with a built-in VT terminal module and no
+ncurses dependency.
 
 ## Build and run
 
@@ -18,7 +19,17 @@ Install to `/usr/local/bin` by default:
 make install
 ```
 
-An interactive terminal is required. Command-line arguments are not supported.
+Terminal-module regression tests use a pseudo-terminal and FreeBSD's base
+`libutil`; they do not require a browser or ncurses:
+
+```sh
+make -C tests
+./tests/terminal_test
+```
+
+An interactive VT-compatible terminal is required, such as the FreeBSD console
+or an xterm-compatible terminal over SSH or ttyd. `TERM` must be set and must
+not be `dumb`. Command-line arguments are not supported.
 Live-process access follows FreeBSD permissions and jail visibility rules; root
 access is not required when the system permits access.
 
@@ -33,13 +44,23 @@ access is not required when the system permits access.
 | `q` / `Ctrl+C` | Quit and restore the terminal. |
 
 Other keyboard input is ignored. Terminal resizing is supported. Escape keys and
-incomplete mouse escape sequences do not exit the monitor. Mouse reporting
-support is required.
+incomplete mouse escape sequences do not exit the monitor. Partial reports are
+retained across input timeouts; a new escape sequence resynchronizes truncated
+reports. Mouse controls use
+SGR or legacy X10 reports; keyboard controls remain available on terminals
+without mouse reporting. `Ctrl+Z` restores the terminal before suspension and
+the display is redrawn immediately when resumed, without waiting for a sample.
 
 The display refreshes every second. The cursor is hidden while the monitor runs
-and its previous visibility is restored on exit. The bottom line is cleared
+and its previous visibility is restored on terminals supporting private-mode
+save/restore; otherwise it is made visible on exit. The bottom line is cleared
 before returning to the shell so the prompt does not overlap a process row on
 terminals without an alternate screen.
+
+Rendering uses row-level differential updates and does not consult terminfo.
+The current locale determines multibyte decoding and character widths. Invalid
+bytes and terminal control characters in displayed text are replaced with `?`;
+text is clipped at character boundaries.
 
 ## Display
 
@@ -183,7 +204,8 @@ returning, including on errors.
 | Files | Responsibility |
 | --- | --- |
 | `top.cpp` / `top.h` | Process and thread sampling through `kvm_getprocs`, including per-thread context-switch counts, username lookup, and ascending PID sorting; whole-system and per-CPU counters and percentages through sysctl. |
-| `tui.cpp` / `tui.h` | Curses rendering, signal handling, and refresh loop. |
+| `tui.cpp` / `tui.h` | Process-table layout, selection, scrolling, thread expansion, and refresh loop. |
+| `terminal.cpp` / `terminal.h` | VT rendering, terminal modes and restoration, signal handling, resizing, and keyboard/mouse input decoding. |
 | `main.cpp` | Application startup and cleanup. |
 
 ## Scope

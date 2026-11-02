@@ -1,0 +1,526 @@
+/*
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Copyright (c) 2026 Yeatol <vim@vimer.org>
+ */
+
+#include "terminal.h"
+
+#include <sys/ioctl.h>
+#include <poll.h>
+#include <unistd.h>
+
+#include <algorithm>
+#include <cerrno>
+#include <charconv>
+#include <clocale>
+#include <cstdlib>
+#include <cstring>
+#include <cwchar>
+#include <format>
+#include <string_view>
+
+static volatile sig_atomic_t stopped           = 0;
+static volatile sig_atomic_t suspend_requested = 0;
+static constexpr std::array  signals           = {SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGWINCH, SIGTSTP};
+static constexpr auto        escape_timeout    = std::chrono::milliseconds(100);
+
+static void terminal_signal(int signal)
+{
+    if (signal == SIGTSTP)
+    {
+        suspend_requested = 1;
+    }
+    else if (signal != SIGWINCH)
+    {
+        stopped = 1;
+    }
+}
+
+static bool terminal_error(std::string& error, const char* operation)
+{
+    error = std::format("{}: {}", operation, std::strerror(errno));
+    return false;
+}
+
+static bool write_output(std::string_view output, std::string& error)
+{
+    while (!output.empty())
+    {
+        ssize_t written = write(STDOUT_FILENO, output.data(), output.size());
+        if (written == -1)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            return terminal_error(error, "writing terminal output");
+        }
+        if (written == 0)
+        {
+            error = "writing terminal output: no progress";
+            return false;
+        }
+        output.remove_prefix(static_cast<size_t>(written));
+    }
+    return true;
+}
+
+static bool enter_screen(terminal_t& terminal, std::string& error)
+{
+    termios mode = terminal.saved_mode;
+    cfmakeraw(&mode);
+    mode.c_lflag |= ISIG;
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &mode) == -1)
+    {
+        return terminal_error(error, "setting terminal mode");
+    }
+    terminal.screen_active = true;
+    // Save private modes where supported; close also supplies conventional defaults.
+    return write_output("\033[?1049h\033[?25s\033[?7s\033[?1000s\033[?1006s"
+                        "\033[?25l\033[?7l\033[?1000h\033[?1006h\033[0m\033[2J\033[H",
+                        error);
+}
+
+static bool leave_screen(terminal_t& terminal, std::string& error)
+{
+    bool success = true;
+    if (terminal.screen_active)
+    {
+        success                = write_output(std::format(
+                                                  "\033[0m\033[?1006l\033[?1000l\033[?1006r\033[?1000r"
+                                                  "\033[{};1H\033[2K\033[?7h\033[?7r\033[?25h\033[?25r\033[?1049l",
+                                                  terminal.height),
+                                              error);
+        terminal.screen_active = false;
+    }
+    if (terminal.mode_saved && tcsetattr(STDIN_FILENO, TCSANOW, &terminal.saved_mode) == -1)
+    {
+        std::string mode_error;
+        terminal_error(mode_error, "restoring terminal mode");
+        if (!error.empty())
+        {
+            error += "; ";
+        }
+        error += mode_error;
+        success = false;
+    }
+    return success;
+}
+
+bool terminal_open(terminal_t& terminal, std::string& error)
+{
+    if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO))
+    {
+        error = "an interactive terminal is required";
+        return false;
+    }
+    const char* type = std::getenv("TERM");
+    if (type == nullptr || *type == '\0' || std::strcmp(type, "dumb") == 0)
+    {
+        error = "a VT-compatible terminal is required (check TERM)";
+        return false;
+    }
+    if (std::setlocale(LC_CTYPE, "") == nullptr)
+    {
+        error = "cannot initialize terminal character locale";
+        return false;
+    }
+    if (tcgetattr(STDIN_FILENO, &terminal.saved_mode) == -1)
+    {
+        return terminal_error(error, "reading terminal mode");
+    }
+    terminal.mode_saved = true;
+    stopped             = 0;
+    suspend_requested   = 0;
+    struct sigaction action{};
+    action.sa_handler = terminal_signal;
+    sigemptyset(&action.sa_mask);
+    for (int signal : signals)
+    {
+        if (sigaction(signal, &action, &terminal.saved_signals[terminal.signal_count]) == -1)
+        {
+            return terminal_error(error, "installing terminal signal handler");
+        }
+        ++terminal.signal_count;
+    }
+    bool changed = false;
+    return terminal_size(terminal, changed, error) && enter_screen(terminal, error);
+}
+
+bool terminal_close(terminal_t& terminal, std::string& error)
+{
+    bool success        = leave_screen(terminal, error);
+    terminal.mode_saved = false;
+    while (terminal.signal_count != 0)
+    {
+        --terminal.signal_count;
+        if (sigaction(signals[terminal.signal_count], &terminal.saved_signals[terminal.signal_count], nullptr) == -1)
+        {
+            std::string signal_error;
+            terminal_error(signal_error, "restoring terminal signal handler");
+            if (!error.empty())
+            {
+                error += "; ";
+            }
+            error += signal_error;
+            success = false;
+        }
+    }
+    terminal.previous.clear();
+    terminal.input.clear();
+    terminal.partial_since    = {};
+    terminal.discard_sequence = false;
+    return success;
+}
+
+bool terminal_size(terminal_t& terminal, bool& changed, std::string& error)
+{
+    winsize size{};
+    changed = false;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == -1)
+    {
+        return terminal_error(error, "reading terminal size");
+    }
+    if (size.ws_row != 0 && size.ws_col != 0 &&
+        (terminal.height != size.ws_row || terminal.width != size.ws_col))
+    {
+        terminal.height = size.ws_row;
+        terminal.width  = size.ws_col;
+        terminal.previous.clear();
+        changed = true;
+    }
+    return true;
+}
+
+static std::string display_text(std::string_view text, int width, bool reverse)
+{
+    std::string result;
+    mbstate_t   state{};
+    int         columns = 0;
+    for (size_t offset = 0; offset < text.size();)
+    {
+        wchar_t character = 0;
+        size_t  length    = std::mbrtowc(&character, text.data() + offset, text.size() - offset, &state);
+        int     cells     = -1;
+        if (length == static_cast<size_t>(-1) || length == static_cast<size_t>(-2))
+        {
+            state     = {};
+            length    = 1;
+            character = 0;
+        }
+        else
+        {
+            length = std::max<size_t>(1, length);
+            if (character >= 32 && !(character >= 127 && character < 160))
+            {
+                cells = wcwidth(character);
+            }
+        }
+        if (cells < 0)
+        {
+            cells = 1;
+        }
+        if (columns + cells > width)
+        {
+            break;
+        }
+        if (character < 32 || (character >= 127 && character < 160) || wcwidth(character) < 0)
+        {
+            result += '?';
+        }
+        else if (cells != 0 || columns != 0)
+        {
+            result.append(text.substr(offset, length));
+        }
+        columns += cells;
+        offset += length;
+    }
+    if (reverse)
+    {
+        result.append(static_cast<size_t>(width - columns), ' ');
+    }
+    return result;
+}
+
+bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& rows, std::string& error)
+{
+    std::vector<terminal_row_t> frame(static_cast<size_t>(terminal.height));
+    std::string                 output;
+    for (int row = 0; row < terminal.height; ++row)
+    {
+        auto& line = frame[row];
+        if (static_cast<size_t>(row) < rows.size())
+        {
+            line.reverse = rows[row].reverse;
+            line.text    = display_text(rows[row].text, terminal.width, line.reverse);
+        }
+        if (static_cast<size_t>(row) >= terminal.previous.size() ||
+            line.text != terminal.previous[row].text || line.reverse != terminal.previous[row].reverse)
+        {
+            output += std::format("\033[{};1H\033[0m\033[2K", row + 1);
+            if (line.reverse)
+            {
+                output += "\033[7m";
+            }
+            output += line.text;
+        }
+    }
+    if (!output.empty())
+    {
+        output += "\033[0m";
+        if (!write_output(output, error))
+        {
+            return false;
+        }
+    }
+    terminal.previous = std::move(frame);
+    return true;
+}
+
+static void mouse_event(terminal_event_t& event, int button, int x, int y, bool released)
+{
+    event.x = x;
+    event.y = y;
+    button &= ~28;
+    if (button == 64 || button == 65)
+    {
+        if (!released)
+        {
+            event.kind = button == 64 ? terminal_event_kind_t::wheel_up : terminal_event_kind_t::wheel_down;
+        }
+    }
+    else if (button == 0 || button == 3)
+    {
+        event.kind = released || button == 3 ? terminal_event_kind_t::mouse_release : terminal_event_kind_t::mouse_press;
+    }
+}
+
+static void sgr_mouse(std::string_view parameters, bool released, terminal_event_t& event)
+{
+    std::array<int, 3> values{};
+    for (size_t i = 0; i < values.size(); ++i)
+    {
+        auto end    = parameters.find(';');
+        auto field  = parameters.substr(0, end);
+        auto parsed = std::from_chars(field.data(), field.data() + field.size(), values[i]);
+        if (field.empty() || parsed.ec != std::errc{} || parsed.ptr != field.data() + field.size() || values[i] < 0)
+        {
+            return;
+        }
+        if (i + 1 < values.size())
+        {
+            if (end == std::string_view::npos)
+            {
+                return;
+            }
+            parameters.remove_prefix(end + 1);
+        }
+        else if (end != std::string_view::npos)
+        {
+            return;
+        }
+    }
+    if (values[1] > 0 && values[2] > 0)
+    {
+        mouse_event(event, values[0], values[1] - 1, values[2] - 1, released);
+    }
+}
+
+static bool decode_input(terminal_t& terminal, terminal_event_t& event)
+{
+    while (!terminal.input.empty())
+    {
+        size_t consumed = 1;
+        if (terminal.discard_sequence)
+        {
+            if (terminal.input.front() == '\033')
+            {
+                terminal.discard_sequence = false;
+                continue;
+            }
+            unsigned char character   = terminal.input.front();
+            terminal.discard_sequence = character < 0x40 || character > 0x7e;
+        }
+        else if (terminal.input.front() != '\033')
+        {
+            event.kind      = terminal_event_kind_t::character;
+            event.character = terminal.input.front();
+        }
+        else
+        {
+            if (terminal.input.size() < 2)
+            {
+                return false;
+            }
+            if (terminal.input[1] == '[' && terminal.input.size() >= 3 && terminal.input[2] == 'M')
+            {
+                auto next_escape = terminal.input.find('\033', 3);
+                if (next_escape < 6)
+                {
+                    terminal.input.erase(0, next_escape);
+                    terminal.partial_since = {};
+                    continue;
+                }
+                if (terminal.input.size() < 6)
+                {
+                    return false;
+                }
+                consumed   = 6;
+                int button = static_cast<unsigned char>(terminal.input[3]) - 32;
+                int x      = static_cast<unsigned char>(terminal.input[4]) - 33;
+                int y      = static_cast<unsigned char>(terminal.input[5]) - 33;
+                if (button >= 0 && x >= 0 && y >= 0)
+                {
+                    mouse_event(event, button, x, y, false);
+                }
+            }
+            else if (terminal.input[1] == '[' || terminal.input[1] == 'O')
+            {
+                size_t end = 2;
+                while (end < terminal.input.size() &&
+                       terminal.input[end] != '\033' &&
+                       (static_cast<unsigned char>(terminal.input[end]) < 0x40 ||
+                        static_cast<unsigned char>(terminal.input[end]) > 0x7e))
+                {
+                    ++end;
+                }
+                if (end < terminal.input.size() && terminal.input[end] == '\033')
+                {
+                    terminal.input.erase(0, end);
+                    terminal.partial_since = {};
+                    continue;
+                }
+                if (end == terminal.input.size())
+                {
+                    if (end > 128)
+                    {
+                        terminal.input.clear();
+                        terminal.discard_sequence = true;
+                    }
+                    return false;
+                }
+                consumed = end + 1;
+                std::string_view parameters(terminal.input.data() + 2, end - 2);
+                char             final = terminal.input[end];
+                if (terminal.input[1] == '[' && parameters.starts_with('<') && (final == 'M' || final == 'm'))
+                {
+                    sgr_mouse(parameters.substr(1), final == 'm', event);
+                }
+                else if ((parameters.empty() || parameters == "1" || parameters.starts_with("1;")) &&
+                         (final == 'A' || final == 'B'))
+                {
+                    event.kind = final == 'A' ? terminal_event_kind_t::up : terminal_event_kind_t::down;
+                }
+            }
+            else
+            {
+                consumed = 2;
+            }
+        }
+        terminal.input.erase(0, consumed);
+        terminal.partial_since = {};
+        if (event.kind != terminal_event_kind_t::none)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool terminal_read(terminal_t& terminal, terminal_event_t& event, int timeout_ms, std::string& error)
+{
+    event = {};
+    if (suspend_requested && !stopped)
+    {
+        suspend_requested = 0;
+        if (!leave_screen(terminal, error))
+        {
+            return false;
+        }
+        if (raise(SIGSTOP) != 0)
+        {
+            return terminal_error(error, "suspending terminal");
+        }
+        if (!enter_screen(terminal, error))
+        {
+            return false;
+        }
+        terminal.previous.clear();
+        event.kind = terminal_event_kind_t::redraw;
+        return true;
+    }
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    while (!stopped)
+    {
+        if (decode_input(terminal, event))
+        {
+            return true;
+        }
+        auto now        = std::chrono::steady_clock::now();
+        auto wait_until = deadline;
+        if (!terminal.input.empty())
+        {
+            if (terminal.partial_since == std::chrono::steady_clock::time_point{})
+            {
+                terminal.partial_since = now;
+            }
+            wait_until = std::min(wait_until, terminal.partial_since + escape_timeout);
+            if (now >= terminal.partial_since + escape_timeout)
+            {
+                // Keep structured reports intact so delayed coordinates cannot become keys.
+                if (terminal.input.size() == 1)
+                {
+                    terminal.input.clear();
+                }
+                terminal.partial_since = {};
+                return true;
+            }
+        }
+        int    wait = static_cast<int>(std::max<int64_t>(0, std::chrono::duration_cast<std::chrono::milliseconds>(wait_until - now).count()));
+        pollfd descriptor{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
+        int    ready = poll(&descriptor, 1, wait);
+        if (ready == -1)
+        {
+            if (errno == EINTR)
+            {
+                return true;
+            }
+            return terminal_error(error, "waiting for terminal input");
+        }
+        if (ready == 0)
+        {
+            return true;
+        }
+        if (descriptor.revents & (POLLERR | POLLNVAL))
+        {
+            error = "terminal input is unavailable";
+            return false;
+        }
+        if (descriptor.revents & (POLLIN | POLLHUP))
+        {
+            char    buffer[256];
+            ssize_t count = read(STDIN_FILENO, buffer, sizeof(buffer));
+            if (count < 0)
+            {
+                if (errno == EINTR)
+                {
+                    return true;
+                }
+                return terminal_error(error, "reading terminal input");
+            }
+            if (count == 0)
+            {
+                error = "terminal input closed";
+                return false;
+            }
+            terminal.input.append(buffer, static_cast<size_t>(count));
+        }
+    }
+    return true;
+}
+
+bool terminal_stopped()
+{
+    return stopped != 0;
+}
