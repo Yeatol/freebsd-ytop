@@ -6,19 +6,26 @@
 
 #include "terminal.h"
 
-#include <sys/ioctl.h>
-#include <sys/wait.h>
-#include <libutil.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <libutil.h>
+#include <termios.h>
+#include <sys/wait.h>
+#include <sys/ioctl.h>
 
 #include <cerrno>
-#include <algorithm>
-#include <charconv>
 #include <cstdio>
+#include <string>
+#include <vector>
 #include <cstdlib>
 #include <cstring>
+#include <charconv>
+#include <signal.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <algorithm>
 #include <string_view>
+#include <system_error>
 
 static void check(bool passed, const char* message)
 {
@@ -222,6 +229,11 @@ static void apply_output(test_screen_t& screen, std::string_view output)
         }
         if (ch != '\033')
         {
+            if (ch == 0xe2 && output.substr(i - 1, 3) == "\u2588")
+            {
+                i += 2;
+                ch = '#';
+            }
             check(ch >= 32 && ch < 127, "ASCII screen emulator receives printable text");
             size_t cell = static_cast<size_t>(screen.y * screen.width + screen.x);
             screen.text[cell] = ch;
@@ -313,6 +325,14 @@ static void expect_screen(const test_screen_t& screen, const std::vector<termina
             size_t cell = static_cast<size_t>(y * screen.width + x);
             bool present = static_cast<size_t>(y) < rows.size();
             char expected = present && static_cast<size_t>(x) < rows[y].text.size() ? rows[y].text[x] : ' ';
+            size_t bar_count = present ? rows[y].right_bar.size() : 0;
+            int bar_start = screen.width - static_cast<int>(bar_count);
+            bool right_bar = present && x >= bar_start;
+            auto bar_color = right_bar ? rows[y].right_bar[static_cast<size_t>(x - bar_start)] : terminal_color_t::normal;
+            if (right_bar)
+            {
+                expected = bar_color == terminal_color_t::normal ? ' ' : '#';
+            }
             check(screen.text[cell] == expected, "rendered cell matches complete frame");
             check(screen.styles[cell] == (present && rows[y].reverse), "rendered style matches complete frame");
             auto color = present ? rows[y].foreground : terminal_color_t::normal;
@@ -326,7 +346,7 @@ static void expect_screen(const test_screen_t& screen, const std::vector<termina
                     }
                 }
             }
-            check(screen.colors[cell] == color, "rendered foreground matches complete frame");
+            check(screen.colors[cell] == (right_bar ? bar_color : color), "rendered foreground matches complete frame");
         }
     }
 }
@@ -406,6 +426,32 @@ static void test_differential_render(terminal_t& terminal, int master)
     }
     rows[1].foreground = terminal_color_t::normal;
     rows[1].reverse = false;
+    render();
+
+    rows[0].right_bar = {terminal_color_t::green};
+    rows[1].right_bar = {terminal_color_t::red};
+    rows[2].right_bar = {terminal_color_t::yellow};
+    rows[3].right_bar = {terminal_color_t::normal};
+    rows[1].foreground = terminal_color_t::blue;
+    auto squares = render();
+    check(squares.find("\u2588") != std::string::npos, "right CPU bar emits UTF-8 full blocks");
+    check(render().empty(), "unchanged right CPU bar emits no bytes");
+    rows[1].right_bar = {terminal_color_t::normal};
+    rows[2].right_bar = {terminal_color_t::red};
+    rows[3].text.clear();
+    render();
+    for (auto& row : rows)
+    {
+        row.right_bar = {terminal_color_t::green, terminal_color_t::red, terminal_color_t::yellow};
+    }
+    render();
+    rows[1].right_bar = {terminal_color_t::normal, terminal_color_t::green, terminal_color_t::red};
+    render();
+    for (auto& row : rows)
+    {
+        row.right_bar.clear();
+    }
+    rows[1].foreground = terminal_color_t::normal;
     render();
 
     uint32_t random = 12345;

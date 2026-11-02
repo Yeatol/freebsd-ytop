@@ -28,12 +28,13 @@
 #pragma once
 
 #include <termios.h>
-#include <signal.h>
 
 #include <array>
 #include <chrono>
 #include <string>
 #include <vector>
+#include <signal.h>
+#include <stddef.h>
 
 enum class terminal_event_kind_t
 {
@@ -94,6 +95,7 @@ struct terminal_row_t
     terminal_color_t foreground = terminal_color_t::normal;
     // Byte offsets in sanitized ASCII text; colored spans require ASCII rows.
     std::vector<terminal_color_span_t> colors{};
+    std::vector<terminal_color_t>      right_bar{};
 };
 
 struct terminal_t

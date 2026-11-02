@@ -25,16 +25,18 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "tui.h"
 #include "top.h"
+#include "tui.h"
 #include "terminal.h"
 
-#include <stdio.h>
 #include <chrono>
 #include <format>
 #include <string>
 #include <vector>
+#include <stdio.h>
+#include <iterator>
 #include <stddef.h>
+#include <stdint.h>
 #include <algorithm>
 #include <unordered_map>
 
@@ -196,6 +198,35 @@ static void toggle_threads(std::unordered_map<int, std::chrono::steady_clock::ti
     }
 }
 
+static void cpu_bar(const cpu_t& cpu, int width, terminal_row_t& row)
+{
+    row.text.clear();
+    row.colors.clear();
+    row.reverse = false;
+    if (width <= 0)
+    {
+        return;
+    }
+    const auto& percentages = cpu.percent_tenths;
+    const int   usage[]     = {
+        percentages[CP_USER] + percentages[CP_NICE],
+        percentages[CP_SYS],
+        percentages[CP_INTR]};
+    constexpr terminal_color_t colors[] = {
+        terminal_color_t::green, terminal_color_t::red, terminal_color_t::yellow};
+    int total = 0;
+    for (size_t i = 0; i < std::size(usage); ++i)
+    {
+        total += usage[i];
+        size_t end = static_cast<size_t>((static_cast<int64_t>(width) * std::clamp(total, 0, 1000) + 500) / 1000);
+        if (end > row.text.size())
+        {
+            row.colors.push_back({row.text.size(), colors[i]});
+            row.text.resize(end, '|');
+        }
+    }
+}
+
 int tui(top_t& top)
 {
     std::string error;
@@ -220,6 +251,7 @@ int tui(top_t& top)
 
             std::vector<display_row_t>                                     output;
             std::vector<terminal_row_t>                                    frame;
+            terminal_row_t                                                 bar;
             std::unordered_map<int, std::chrono::steady_clock::time_point> expanded;
 
             while (status == 0 && !terminal_stopped())
@@ -267,20 +299,38 @@ int tui(top_t& top)
                 int height             = terminal.height;
                 int width              = terminal.width;
                 int total_rows         = static_cast<int>(output.size()) - 1;
+                int table_width        = std::max(0, width - 1);
                 int visible_rows       = std::max(0, height - 1);
                 int max_offset         = std::max(0, total_rows - visible_rows);
                 scroll_offset          = std::clamp(scroll_offset, 0, max_offset);
                 int visible_line_count = std::min(visible_rows, total_rows - scroll_offset) + 1;
                 if (redraw)
                 {
-                    frame.resize(static_cast<size_t>(visible_line_count));
-                    for (int row = 0; row < visible_line_count; ++row)
+                    frame.resize(static_cast<size_t>(height));
+                    cpu_bar(snapshot.cpu, height, bar);
+                    size_t color_index = 0;
+                    auto   bar_color   = terminal_color_t::normal;
+                    for (int row = 0; row < height; ++row)
+                    {
+                        while (color_index < bar.colors.size() && bar.colors[color_index].offset <= static_cast<size_t>(row))
+                        {
+                            bar_color = bar.colors[color_index++].color;
+                        }
+                        frame[height - 1 - row].right_bar = {static_cast<size_t>(row) < bar.text.size() ? bar_color : terminal_color_t::normal};
+                    }
+                    for (int row = 0; row < height; ++row)
                     {
                         frame[row].reverse    = false;
                         frame[row].foreground = terminal_color_t::normal;
                         frame[row].colors.clear();
-                        int  output_row_index = row == 0 ? 0 : row + scroll_offset;
-                        bool row_is_selected  = row > 0 && output[output_row_index].pid == selected_pid && (output[output_row_index].thread ? output[output_row_index].tid == selected_tid : selected_tid == -1);
+                        int table_row = row;
+                        if (table_row >= visible_line_count)
+                        {
+                            frame[row].text.clear();
+                            continue;
+                        }
+                        int  output_row_index = table_row == 0 ? 0 : table_row + scroll_offset;
+                        bool row_is_selected  = table_row > 0 && output[output_row_index].pid == selected_pid && (output[output_row_index].thread ? output[output_row_index].tid == selected_tid : selected_tid == -1);
                         frame[row].text       = output[output_row_index].text;
                         frame[row].foreground = row_is_selected ? terminal_color_t::blue : terminal_color_t::normal;
                     }
@@ -315,7 +365,7 @@ int tui(top_t& top)
                         pressed_pid       = -1;
                         pressed_tid       = -1;
                         toggle_on_release = false;
-                        if (input.y > 0 && input.y < visible_line_count && input.x >= 0 && input.x < width)
+                        if (input.y > 0 && input.y < visible_line_count && input.x >= 0 && input.x < table_width)
                         {
                             const auto& pressed_row  = output[input.y + scroll_offset];
                             bool        was_selected = selected_pid == pressed_row.pid && (pressed_row.thread ? selected_tid == pressed_row.tid : selected_tid == -1);
@@ -329,7 +379,7 @@ int tui(top_t& top)
                     }
                     if (input.kind == terminal_event_kind_t::mouse_release)
                     {
-                        if (toggle_on_release && input.y > 0 && input.y < visible_line_count && input.x >= 0 && input.x < width)
+                        if (toggle_on_release && input.y > 0 && input.y < visible_line_count && input.x >= 0 && input.x < table_width)
                         {
                             const auto& released_row = output[input.y + scroll_offset];
                             if (released_row.pid == pressed_pid && released_row.tid == pressed_tid && selected_pid == released_row.pid &&

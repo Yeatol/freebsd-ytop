@@ -27,27 +27,35 @@
 
 #include "top.h"
 
-#include <sys/proc.h>
-#include <sys/user.h>
-#include <sys/param.h>
-#include <sys/cpuset.h>
-#include <sys/rtprio.h>
-#include <sys/sysctl.h>
-#include <sys/resource.h>
-
 #include <kvm.h>
-#include <sys/time.h>
 #include <pwd.h>
 #include <fcntl.h>
 #include <paths.h>
-#include <stddef.h>
 #include <unistd.h>
+#include <sys/proc.h>
+#include <sys/time.h>
+#include <sys/user.h>
+#include <sys/param.h>
+#include <sys/cpuset.h>
+#include <sys/sysctl.h>
+#include <sys/priority.h>
+#include <sys/resource.h>
 
+#include <array>
+#include <cerrno>
+#include <chrono>
 #include <format>
-#include <cstdlib>
+#include <string>
+#include <vector>
 #include <cstring>
+#include <utility>
 #include <iterator>
+#include <limits.h>
+#include <optional>
+#include <stddef.h>
+#include <stdint.h>
 #include <algorithm>
+#include <unordered_map>
 
 static std::string text(const char* value, size_t capacity)
 {

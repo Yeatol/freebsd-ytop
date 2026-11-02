@@ -29,9 +29,11 @@ make -C tests
 
 An interactive VT-compatible terminal is required, such as the FreeBSD console
 or an xterm-compatible terminal over SSH or ttyd. `TERM` must be set and must
-not be `dumb`. Command-line arguments are not supported.
+not be `dumb`.
 Live-process access follows FreeBSD permissions and jail visibility rules; root
 access is not required when the system permits access.
+
+Command-line arguments are ignored without a message.
 
 ## Controls
 
@@ -39,7 +41,7 @@ access is not required when the system permits access.
 | --- | --- |
 | `Up` / `Down` | Move the selection by one displayed row, including thread rows. Selection does not wrap; the list scrolls to keep it visible. With no selection, `Down` selects the first visible row and `Up` selects the last visible row. |
 | `Space` | For a selected multi-threaded process, expand or collapse its thread rows. For a selected single-threaded process, show or hide its main thread's context-switch counts. On a selected thread row, collapse its parent process and select the parent row, keeping it visible. Does nothing when nothing is selected. |
-| Left-click | Select a process or thread. Clicking the already selected process toggles its thread rows when it has more than one thread, or toggles its main thread's context-switch counts when it has one thread. Clicking an already selected thread collapses its parent process and selects the parent row, keeping it visible. Clicking the header or blank space does not change the selection. |
+| Left-click | Select a process or thread. Clicking the already selected process toggles its thread rows when it has more than one thread, or toggles its main thread's context-switch counts when it has one thread. Clicking an already selected thread collapses its parent process and selects the parent row, keeping it visible. Clicking the status bar, header, or blank space does not change the selection. |
 | Mouse wheel | Scroll three rows per step. Scrolling is bounded by the list and adjusted when rows disappear or collapse. |
 | `Esc` / Right-click | Clear the selection without collapsing expanded processes or changing the scroll position. |
 | `q` / `Ctrl+C` | Quit and restore the terminal. |
@@ -59,31 +61,45 @@ save/restore; otherwise it is made visible on exit. The bottom line is cleared
 before returning to the shell so the prompt does not overlap a process row on
 terminals without an alternate screen.
 
-Rendering reuses frame/output buffers and updates changed ASCII spans, merging
-nearby changes to reduce cursor and style commands. Rows containing multibyte
-text retain whole-row updates. No terminfo library is used.
-ASCII classification is reused within each row's rendering operation, without
-adding classification state to the cross-frame cache.
+Rendering reuses frame/output buffers and skips unchanged rows. The terminal
+module supports changed-span updates for plain ASCII rows, merging nearby
+changes to reduce cursor and style commands. Rows with a right-side CPU bar,
+color spans, or multibyte text use whole-row updates when changed. Since the TUI
+reserves a CPU-bar cell on every row, changed TUI rows use whole-row updates.
+No terminfo library is used.
 The terminal is queried for synchronized-output mode (DEC mode 2026); frames
 are bracketed only after a response confirms support. Terminals that do not
 respond or report no support continue with ordinary buffered updates.
 The current locale determines multibyte decoding and character widths. Invalid
 bytes and terminal control characters in displayed text are replaced with `?`;
 text is clipped at character boundaries.
+The sampler separately replaces non-ASCII bytes in process names, thread names,
+usernames, and wait-channel text with `?` before they reach the renderer.
 
 ## Display
 
-The process table has a fixed header on the first line. All remaining rows,
-including the bottom line, are available for processes and threads.
-There is no bottom status bar. A one-row terminal shows only the header.
+A fixed one-column CPU bar on the right edge uses full blocks (U+2588)
+without brackets, labels or numbers. The full terminal height represents 100%
+of aggregate logical CPU capacity.
+Segments fill from bottom to top: user plus nice in green, system in red, and
+interrupts in yellow. Idle capacity above them is blank. Segment boundaries are
+rounded to the nearest cell using cumulative percentages, so very small segments
+may not be visible.
+The bar uses colored text on the default background without reverse video.
+The terminal must display UTF-8 U+2588 as a single-column character.
+The first sample uses proportions since boot; subsequent samples use interval
+proportions. Intervals without CPU ticks leave the bar blank.
+The process table header stays fixed on the first line.
+All rows below the header are available for processes and threads.
+The table uses the columns to the left of the CPU bar. In a one-column terminal,
+only the CPU bar is visible.
 Load averages, process summaries, and keyboard hints are not shown.
-Header fields use the terminal's default text color; the selected row uses ANSI blue;
-backgrounds remain unchanged.
+Header fields use the terminal's default text color; the selected row uses ANSI
+blue. Table backgrounds remain unchanged.
 Colors use the terminal's 16-color palette, so their appearance depends on its
 theme. Header and selection highlighting do not use reverse video.
 Foreground changes fully reset rendition before applying the color and any
-reverse-video attribute. This avoids bright colors leaking into subsequent text
-on terminals such as Xshell where clearing intensity alone is insufficient.
+reverse-video attribute.
 
 Columns follow FreeBSD `top`, with a TID column after PID:
 
@@ -93,15 +109,16 @@ Columns follow FreeBSD `top`, with a TID column after PID:
 4. Thread count
 5. Priority
 6. Nice value
-7. Virtual and resident memory
-8. Swap usage
-9. State or wait channel
-10. CPU
-11. Accumulated CPU time
-12. Unweighted CPU percentage (`CPU`)
-13. User-mode CPU percentage (`CPU_USR`)
-14. Kernel-mode CPU percentage (`CPU_SYS`)
-15. Command name
+7. Virtual memory (`SIZE`)
+8. Resident memory (`RES`)
+9. Swap usage (`SWAP`)
+10. State or wait channel (`STATE`)
+11. Current or last CPU (`C`), or `-` if unavailable
+12. Accumulated CPU time (`TIME`)
+13. Unweighted CPU percentage (`CPU`)
+14. User-mode CPU percentage (`CPU_USR`)
+15. Kernel-mode CPU percentage (`CPU_SYS`)
+16. Command name (`COMMAND`)
 
 There is no separate JID column. Commands for processes and threads with
 `ki_jid > 0` are prefixed with `[jail:ID] `; host processes (`ki_jid == 0`) have
@@ -175,8 +192,9 @@ differences. A value of 100% represents one CPU. Parent rows retain process
 totals when expanded; child rows use per-thread accounting. These rates are
 not normalized to sum to 100%.
 
-For user processes, the first sample displays `0.00%` until interval
-measurements are available. On later samples, records with no previous entry
+For user processes, the first sample displays `0.00%` in `CPU_USR` and `CPU_SYS`
+until interval measurements are available; `CPU` uses the kernel estimate.
+On later samples, records with no previous entry
 or decreased accumulated runtime are treated as new instances: their
 accumulated CPU times are divided by the sample interval. For records treated
 as the same instance, if either user-mode or kernel-mode time decreases,
@@ -189,8 +207,9 @@ from `CPU`.
 
 ### System CPU sampling
 
-`top_sample` also collects whole-system and per-CPU data without changing the
-process-table UI. Like FreeBSD `top`, it sizes the per-CPU buffer using
+`top_sample` collects whole-system and per-CPU data. The right-side bar uses
+the whole-system summary; individual CPU data is not displayed.
+Like FreeBSD `top`, it sizes the per-CPU buffer using
 `kern.smp.maxcpus`, reads `kern.cp_times`, and omits CPU slots whose counters
 are all zero. `snapshot.cpus` retains the actual CPU IDs in ascending order,
 including gaps in numbering. `snapshot.cpu` is the separate whole-system
@@ -222,12 +241,13 @@ returning, including on errors.
 | Files | Responsibility |
 | --- | --- |
 | `top.cpp` / `top.h` | Process and thread sampling through `kvm_getprocs`, including per-thread context-switch counts, username lookup, and ascending PID sorting; whole-system and per-CPU counters and percentages through sysctl. |
-| `tui.cpp` / `tui.h` | Process-table layout, selection, scrolling, thread expansion, and refresh loop. |
+| `tui.cpp` / `tui.h` | Process-table and aggregate CPU-bar layout, selection, scrolling, thread expansion, and refresh loop. |
 | `terminal.cpp` / `terminal.h` | VT rendering, terminal modes and restoration, signal handling, resizing, and keyboard/mouse input decoding. |
 | `main.cpp` | Application startup and cleanup. |
 
 ## Scope
 
-This demo intentionally omits system CPU, memory, and swap summaries, thread
-mode, full command arguments, filtering, and interactive sort selection. It is
-not a complete replacement for FreeBSD `top`.
+This monitor intentionally omits numeric system CPU summaries, per-CPU displays,
+system memory and swap summaries, full command arguments, filtering, and
+interactive sort selection. Threads are available through per-process expansion.
+It is not a complete replacement for FreeBSD `top`.

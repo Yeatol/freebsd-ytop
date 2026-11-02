@@ -27,19 +27,28 @@
 
 #include "terminal.h"
 
-#include <sys/ioctl.h>
 #include <poll.h>
 #include <unistd.h>
+#include <termios.h>
+#include <sys/ioctl.h>
 
-#include <algorithm>
+#include <array>
 #include <cerrno>
-#include <charconv>
+#include <chrono>
+#include <cwchar>
+#include <format>
+#include <string>
+#include <vector>
 #include <clocale>
 #include <cstdlib>
 #include <cstring>
-#include <cwchar>
-#include <format>
+#include <charconv>
+#include <signal.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <algorithm>
 #include <string_view>
+#include <system_error>
 
 static volatile sig_atomic_t stopped           = 0;
 static volatile sig_atomic_t suspend_requested = 0;
@@ -373,13 +382,22 @@ bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& ro
         line.reverse    = false;
         line.foreground = terminal_color_t::normal;
         line.colors.clear();
+        line.right_bar.clear();
         line.text.clear();
         if (static_cast<size_t>(row) < rows.size())
         {
             line.reverse    = rows[row].reverse;
             line.foreground = rows[row].foreground;
             line.colors     = rows[row].colors;
-            ascii           = display_text(rows[row].text, terminal.width, line.reverse, line.text);
+            line.right_bar  = rows[row].right_bar;
+            if (line.right_bar.size() > static_cast<size_t>(terminal.width))
+            {
+                error = "right CPU bars exceed terminal width";
+                return false;
+            }
+            ascii = display_text(rows[row].text, terminal.width - static_cast<int>(line.right_bar.size()),
+                                 line.reverse || !line.right_bar.empty(), line.text);
+            line.text.append(line.right_bar.size(), ' ');
             if (!line.colors.empty() && (!ascii || !std::ranges::is_sorted(line.colors, {}, &terminal_color_span_t::offset)))
             {
                 error = "color spans require sanitized ASCII text and ordered byte offsets";
@@ -388,7 +406,7 @@ bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& ro
         }
         const auto* previous = static_cast<size_t>(row) < terminal.previous.size() ? &terminal.previous[row] : nullptr;
         if (previous != nullptr && line.text == previous->text && line.reverse == previous->reverse &&
-            line.foreground == previous->foreground && line.colors == previous->colors)
+            line.foreground == previous->foreground && line.colors == previous->colors && line.right_bar == previous->right_bar)
         {
             continue;
         }
@@ -404,6 +422,7 @@ bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& ro
         set_foreground(output, line.foreground, foreground, reverse);
         if (previous == nullptr || line.reverse != previous->reverse ||
             line.foreground != previous->foreground || line.colors != previous->colors || !line.colors.empty() ||
+            !line.right_bar.empty() || line.right_bar != previous->right_bar ||
             !ascii || !ascii_text(previous->text))
         {
             move_cursor(output, row, 0, cursor_row, cursor_column);
@@ -422,7 +441,19 @@ bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& ro
                 set_foreground(output, span.color, foreground, reverse);
                 offset = span.offset;
             }
-            output.append(line.text, offset);
+            if (!line.right_bar.empty())
+            {
+                output.append(line.text, offset, line.text.size() - offset - line.right_bar.size());
+                for (auto color : line.right_bar)
+                {
+                    set_foreground(output, color, foreground, reverse);
+                    output += color == terminal_color_t::normal ? " " : "\u2588";
+                }
+            }
+            else
+            {
+                output.append(line.text, offset);
+            }
             set_foreground(output, line.foreground, foreground, reverse);
             if (ascii && line.text.size() < static_cast<size_t>(terminal.width))
             {
