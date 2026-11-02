@@ -13,6 +13,8 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <algorithm>
+#include <charconv>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -134,7 +136,7 @@ static void test_render(terminal_t& terminal, int master)
     std::vector<terminal_row_t> rows = {{"header", true}, {"safe\033[31m"}, {"A\xe4\xb8\xad" "B"}};
     check(terminal_render(terminal, rows, error), error.c_str());
     auto output = drain(master);
-    check(output.find("\033[7mheader    ") != std::string::npos, "reverse row fills width");
+    check(output.find("\033[7m") != std::string::npos && output.find("header    ") != std::string::npos, "reverse row fills width");
     check(output.find("safe?[31m") != std::string::npos && output.find("\033[31m") == std::string::npos, "control characters cannot inject terminal commands");
     check(output.find("A\xe4\xb8\xad" "B") != std::string::npos, "UTF-8 preserved");
     check(terminal_render(terminal, rows, error), error.c_str());
@@ -142,7 +144,7 @@ static void test_render(terminal_t& terminal, int master)
     rows.resize(1);
     check(terminal_render(terminal, rows, error), error.c_str());
     output = drain(master);
-    check(output.find("\033[2;1H\033[0m\033[2K") != std::string::npos, "removed rows are cleared");
+    check(output.find("\033[K") != std::string::npos, "removed rows are cleared");
 
     winsize size{.ws_row = 2, .ws_col = 3, .ws_xpixel = 0, .ws_ypixel = 0};
     check(ioctl(STDOUT_FILENO, TIOCSWINSZ, &size) == 0, "resize PTY");
@@ -167,6 +169,214 @@ static void test_render(terminal_t& terminal, int master)
     check(terminal_render(terminal, {{"\xe4\xb8\xad", true}}, error), error.c_str());
     drain(master);
     check(terminal.previous[0].text == " ", "wide character does not overflow a one-column terminal");
+}
+
+struct test_screen_t
+{
+    int width;
+    int height;
+    int x = 0;
+    int y = 0;
+    bool reverse = false;
+    std::string text;
+    std::vector<bool> styles;
+};
+
+static void apply_output(test_screen_t& screen, std::string_view output)
+{
+    for (size_t i = 0; i < output.size();)
+    {
+        unsigned char ch = output[i++];
+        if (ch == '\r')
+        {
+            screen.x = 0;
+            continue;
+        }
+        if (ch != '\033')
+        {
+            check(ch >= 32 && ch < 127, "ASCII screen emulator receives printable text");
+            size_t cell = static_cast<size_t>(screen.y * screen.width + screen.x);
+            screen.text[cell] = ch;
+            screen.styles[cell] = screen.reverse;
+            screen.x = std::min(screen.width - 1, screen.x + 1);
+            continue;
+        }
+        check(i < output.size() && output[i++] == '[', "complete CSI introducer");
+        size_t begin = i;
+        while (i < output.size() && (output[i] < '@' || output[i] > '~'))
+        {
+            ++i;
+        }
+        check(i < output.size(), "complete CSI final");
+        auto parameters = output.substr(begin, i - begin);
+        char final = output[i++];
+        if (parameters.starts_with('?'))
+        {
+            check((final == 'h' || final == 'l') && parameters == "?2026", "only synchronization commands in frame");
+            continue;
+        }
+        int first = 0;
+        int second = 1;
+        if (!parameters.empty())
+        {
+            auto result = std::from_chars(parameters.data(), parameters.data() + parameters.size(), first);
+            check(result.ec == std::errc{}, "valid CSI parameter");
+            if (result.ptr != parameters.data() + parameters.size())
+            {
+                check(*result.ptr == ';', "CSI parameter separator");
+                check(std::from_chars(result.ptr + 1, parameters.data() + parameters.size(), second).ec == std::errc{}, "valid second CSI parameter");
+            }
+        }
+        if (final == 'H')
+        {
+            screen.y = std::clamp(first - 1, 0, screen.height - 1);
+            screen.x = std::clamp(second - 1, 0, screen.width - 1);
+        }
+        else if (final == 'C')
+        {
+            screen.x = std::min(screen.width - 1, screen.x + std::max(1, first));
+        }
+        else if (final == 'B')
+        {
+            screen.y = std::min(screen.height - 1, screen.y + std::max(1, first));
+        }
+        else if (final == 'K')
+        {
+            check(first == 0 || first == 2, "supported erase mode");
+            for (int column = first == 2 ? 0 : screen.x; column < screen.width; ++column)
+            {
+                size_t cell = static_cast<size_t>(screen.y * screen.width + column);
+                screen.text[cell] = ' ';
+                screen.styles[cell] = screen.reverse;
+            }
+        }
+        else if (final == 'm')
+        {
+            check(first == 0 || first == 7, "supported style");
+            screen.reverse = first == 7;
+        }
+        else
+        {
+            check(false, "unexpected renderer command");
+        }
+    }
+}
+
+static void expect_screen(const test_screen_t& screen, const std::vector<terminal_row_t>& rows)
+{
+    for (int y = 0; y < screen.height; ++y)
+    {
+        for (int x = 0; x < screen.width; ++x)
+        {
+            size_t cell = static_cast<size_t>(y * screen.width + x);
+            bool present = static_cast<size_t>(y) < rows.size();
+            char expected = present && static_cast<size_t>(x) < rows[y].text.size() ? rows[y].text[x] : ' ';
+            check(screen.text[cell] == expected, "rendered cell matches complete frame");
+            check(screen.styles[cell] == (present && rows[y].reverse), "rendered style matches complete frame");
+        }
+    }
+}
+
+static void test_differential_render(terminal_t& terminal, int master)
+{
+    winsize size{.ws_row = 4, .ws_col = 120, .ws_xpixel = 0, .ws_ypixel = 0};
+    check(ioctl(STDOUT_FILENO, TIOCSWINSZ, &size) == 0, "set differential test dimensions");
+    std::string error;
+    bool changed = false;
+    check(terminal_size(terminal, changed, error), error.c_str());
+    test_screen_t screen{.width = 120, .height = 4, .text = std::string(480, ' '), .styles = std::vector<bool>(480)};
+    std::vector<terminal_row_t> rows(4);
+    for (auto& row : rows)
+    {
+        row.text = std::string(120, 'a');
+    }
+    rows[0].reverse = true;
+    auto render = [&]() {
+        check(terminal_render(terminal, rows, error), error.c_str());
+        auto output = drain(master);
+        apply_output(screen, output);
+        expect_screen(screen, rows);
+        return output;
+    };
+    auto full = render();
+    check(full.size() < 560, "full frame does not repeat per-row style resets");
+    rows[1].text[60] = 'b';
+    auto single = render();
+    check(single.size() <= 12 && single.find('a') == std::string::npos, "single-cell change only writes that cell");
+    rows[1].text[10] = 'c';
+    rows[1].text[110] = 'd';
+    auto separated = render();
+    check(separated.size() <= 24, "distant changes use separate short spans");
+    rows[1].text[20] = 'x';
+    rows[1].text[23] = 'y';
+    auto nearby = render();
+    check(nearby.find("xaay") != std::string::npos, "nearby changes share one span");
+    rows[1].text.resize(30);
+    render();
+    rows[1].text.clear();
+    render();
+    rows[2].reverse = true;
+    render();
+    rows[2].reverse = false;
+    render();
+    rows[3].text[119] = 'z';
+    render();
+    check(render().empty(), "unchanged differential frame emits no bytes");
+
+    uint32_t random = 12345;
+    for (int frame = 0; frame < 200; ++frame)
+    {
+        random = random * 1664525 + 1013904223;
+        size_t row = (random >> 16) % rows.size();
+        size_t length = random % 121;
+        rows[row].text.resize(length, ' ');
+        if (length != 0)
+        {
+            rows[row].text[(random >> 8) % length] = static_cast<char>('!' + random % 94);
+        }
+        rows[row].reverse = (random & 8) != 0;
+        render();
+    }
+
+    for (auto& row : rows)
+    {
+        row.text.assign(120, 'x');
+    }
+    render();
+    render();
+    auto first = terminal.previous.data();
+    auto second = terminal.frame.data();
+    auto first_text = terminal.previous[1].text.data();
+    auto second_text = terminal.frame[1].text.data();
+    auto output_buffer = terminal.output.data();
+    auto capacity = terminal.output.capacity();
+    for (int i = 0; i < 20; ++i)
+    {
+        rows[1].text[60] = i % 2 == 0 ? 'y' : 'x';
+        render();
+        check(terminal.previous.data() == (i % 2 == 0 ? second : first), "frame arrays reused");
+        check(terminal.previous[1].text.data() == (i % 2 == 0 ? second_text : first_text), "row storage reused");
+        check(terminal.output.data() == output_buffer && terminal.output.capacity() == capacity, "output buffer reused");
+    }
+    fprintf(stderr, "120-column frame: full=%zu bytes, single-cell=%zu bytes, two distant cells=%zu bytes\n",
+            full.size(), single.size(), separated.size());
+}
+
+static void test_synchronized_output(terminal_t& terminal, int master)
+{
+    std::string error;
+    check(terminal.sync_query_pending && !terminal.synchronized_output, "synchronized output disabled until confirmed");
+    expect_event(terminal, master, "\033[?2026;", terminal_event_kind_t::none);
+    check(!terminal.synchronized_output, "partial capability reply does not enable mode");
+    expect_event(terminal, master, "2$y", terminal_event_kind_t::none);
+    check(terminal.synchronized_output && !terminal.sync_query_pending, "supported mode confirmed by terminal");
+    check(terminal_render(terminal, {{"synchronized"}}, error), error.c_str());
+    auto output = drain(master);
+    check(output.starts_with("\033[?2026h") && output.ends_with("\033[?2026l"), "frame bounded by synchronization commands");
+    check(terminal_render(terminal, {{"synchronized"}}, error), error.c_str());
+    check(drain(master).empty(), "unchanged synchronized frame writes nothing");
+    expect_event(terminal, master, "\033[?2026;0$y", terminal_event_kind_t::none);
+    check(terminal.synchronized_output, "unsolicited reply does not change mode");
 }
 
 static void test_suspend(int master, const termios& original)
@@ -230,6 +440,8 @@ int main()
     check(startup.find("\033[?1049h") != std::string::npos && startup.find("\033[?1006h") != std::string::npos, "alternate screen and SGR mouse enabled");
     test_input(terminal, master);
     test_render(terminal, master);
+    test_differential_render(terminal, master);
+    test_synchronized_output(terminal, master);
     check(raise(SIGWINCH) == 0 && !terminal_stopped(), "resize signal does not stop terminal");
     check(raise(SIGINT) == 0 && terminal_stopped(), "SIGINT requests clean exit");
     check(terminal_close(terminal, error), error.c_str());
@@ -244,6 +456,9 @@ int main()
     for (int signal : {SIGTERM, SIGHUP, SIGQUIT})
     {
         check(terminal_open(terminal, error), error.c_str());
+        check(!terminal.synchronized_output, "reopen rechecks synchronized-output support");
+        expect_event(terminal, master, "\033[?2026;0$y", terminal_event_kind_t::none);
+        check(!terminal.synchronized_output && !terminal.sync_query_pending, "unsupported synchronization uses ordinary output");
         check(!terminal_stopped(), "reopen resets stop flag");
         check(raise(signal) == 0 && terminal_stopped(), "termination signal requests cleanup");
         check(terminal_close(terminal, error), error.c_str());

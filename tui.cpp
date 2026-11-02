@@ -219,6 +219,7 @@ int tui(top_t& top)
             auto       next_sample       = std::chrono::steady_clock::now();
 
             std::vector<display_row_t>                                     output;
+            std::vector<terminal_row_t>                                    frame;
             std::unordered_map<int, std::chrono::steady_clock::time_point> expanded;
 
             while (status == 0 && !terminal_stopped())
@@ -266,13 +267,13 @@ int tui(top_t& top)
                 int visible_line_count = std::min(visible_rows, total_rows - scroll_offset) + 1;
                 if (redraw)
                 {
-                    std::vector<terminal_row_t> frame;
-                    frame.reserve(static_cast<size_t>(visible_line_count));
+                    frame.resize(static_cast<size_t>(visible_line_count));
                     for (int row = 0; row < visible_line_count; ++row)
                     {
                         int  output_row_index = row == 0 ? 0 : row + scroll_offset;
                         bool row_is_selected  = row > 0 && output[output_row_index].pid == selected_pid && (output[output_row_index].thread ? output[output_row_index].tid == selected_tid : selected_tid == -1);
-                        frame.push_back({output[output_row_index].text, row == 0 || row_is_selected});
+                        frame[row].text       = output[output_row_index].text;
+                        frame[row].reverse    = row == 0 || row_is_selected;
                     }
                     if (!terminal_render(terminal, frame, error))
                     {

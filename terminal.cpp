@@ -96,10 +96,12 @@ static bool enter_screen(terminal_t& terminal, std::string& error)
     {
         return terminal_error(error, "setting terminal mode");
     }
-    terminal.screen_active = true;
+    terminal.screen_active       = true;
+    terminal.synchronized_output = false;
+    terminal.sync_query_pending  = true;
     // Save private modes where supported; close also supplies conventional defaults.
     return write_output("\033[?1049h\033[?25s\033[?7s\033[?1000s\033[?1006s"
-                        "\033[?25l\033[?7l\033[?1000h\033[?1006h\033[0m\033[2J\033[H",
+                        "\033[?25l\033[?7l\033[?1000h\033[?1006h\033[0m\033[2J\033[H\033[?2026$p",
                         error);
 }
 
@@ -108,11 +110,16 @@ static bool leave_screen(terminal_t& terminal, std::string& error)
     bool success = true;
     if (terminal.screen_active)
     {
-        success                = write_output(std::format(
-                                                  "\033[0m\033[?1006l\033[?1000l\033[?1006r\033[?1000r"
-                                                  "\033[{};1H\033[2K\033[?7h\033[?7r\033[?25h\033[?25r\033[?1049l",
-                                                  terminal.height),
-                                              error);
+        std::string restore;
+        if (terminal.synchronized_output)
+        {
+            restore = "\033[?2026l";
+        }
+        restore += std::format(
+            "\033[0m\033[?1006l\033[?1000l\033[?1006r\033[?1000r"
+            "\033[{};1H\033[2K\033[?7h\033[?7r\033[?25h\033[?25r\033[?1049l",
+            terminal.height);
+        success                = write_output(restore, error);
         terminal.screen_active = false;
     }
     if (terminal.mode_saved && tcsetattr(STDIN_FILENO, TCSANOW, &terminal.saved_mode) == -1)
@@ -189,6 +196,10 @@ bool terminal_close(terminal_t& terminal, std::string& error)
         }
     }
     terminal.previous.clear();
+    terminal.frame.clear();
+    terminal.output.clear();
+    terminal.synchronized_output = false;
+    terminal.sync_query_pending  = false;
     terminal.input.clear();
     terminal.partial_since    = {};
     terminal.discard_sequence = false;
@@ -214,11 +225,25 @@ bool terminal_size(terminal_t& terminal, bool& changed, std::string& error)
     return true;
 }
 
-static std::string display_text(std::string_view text, int width, bool reverse)
+static bool ascii_text(std::string_view text)
 {
-    std::string result;
-    mbstate_t   state{};
-    int         columns = 0;
+    return std::ranges::all_of(text, [](unsigned char ch) { return ch >= 32 && ch < 127; });
+}
+
+static void display_text(std::string_view text, int width, bool reverse, std::string& result)
+{
+    result.clear();
+    if (ascii_text(text))
+    {
+        result.assign(text.substr(0, static_cast<size_t>(width)));
+        if (reverse)
+        {
+            result.resize(static_cast<size_t>(width), ' ');
+        }
+        return;
+    }
+    mbstate_t state{};
+    int       columns = 0;
     for (size_t offset = 0; offset < text.size();)
     {
         wchar_t character = 0;
@@ -261,41 +286,165 @@ static std::string display_text(std::string_view text, int width, bool reverse)
     {
         result.append(static_cast<size_t>(width - columns), ' ');
     }
-    return result;
+}
+
+static void move_cursor(std::string& output, int row, int column, int& cursor_row, int& cursor_column)
+{
+    char  buffer[32];
+    char* end = buffer;
+    *end++    = '\033';
+    *end++    = '[';
+    end       = std::to_chars(end, buffer + sizeof(buffer), row + 1).ptr;
+    *end++    = ';';
+    end       = std::to_chars(end, buffer + sizeof(buffer), column + 1).ptr;
+    *end++    = 'H';
+    std::string_view movement(buffer, static_cast<size_t>(end - buffer));
+    char             relative[32];
+    char*            relative_end = relative;
+    if (row == cursor_row && column == 0)
+    {
+        *relative_end++ = '\r';
+    }
+    else if (row == cursor_row && column > cursor_column)
+    {
+        *relative_end++ = '\033';
+        *relative_end++ = '[';
+        relative_end    = std::to_chars(relative_end, relative + sizeof(relative), column - cursor_column).ptr;
+        *relative_end++ = 'C';
+    }
+    else if (row == cursor_row + 1 && column == 0)
+    {
+        std::memcpy(relative_end, "\033[B\r", 4);
+        relative_end += 4;
+    }
+    if (row != cursor_row || column != cursor_column)
+    {
+        if (relative_end != relative && static_cast<size_t>(relative_end - relative) < movement.size())
+        {
+            movement = {relative, static_cast<size_t>(relative_end - relative)};
+        }
+        output.append(movement);
+    }
+    cursor_row    = row;
+    cursor_column = column;
+}
+
+static char cell(std::string_view text, size_t column)
+{
+    return column < text.size() ? text[column] : ' ';
 }
 
 bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& rows, std::string& error)
 {
-    std::vector<terminal_row_t> frame(static_cast<size_t>(terminal.height));
-    std::string                 output;
+    auto& frame  = terminal.frame;
+    auto& output = terminal.output;
+    frame.resize(static_cast<size_t>(terminal.height));
+    output.clear();
+    if (terminal.synchronized_output)
+    {
+        output += "\033[?2026h";
+    }
+    size_t start         = output.size();
+    int    cursor_row    = -2;
+    int    cursor_column = -1;
+    bool   reverse       = false;
     for (int row = 0; row < terminal.height; ++row)
     {
-        auto& line = frame[row];
+        auto& line   = frame[row];
+        line.reverse = false;
+        line.text.clear();
         if (static_cast<size_t>(row) < rows.size())
         {
             line.reverse = rows[row].reverse;
-            line.text    = display_text(rows[row].text, terminal.width, line.reverse);
+            display_text(rows[row].text, terminal.width, line.reverse, line.text);
         }
-        if (static_cast<size_t>(row) >= terminal.previous.size() ||
-            line.text != terminal.previous[row].text || line.reverse != terminal.previous[row].reverse)
+        const auto* previous = static_cast<size_t>(row) < terminal.previous.size() ? &terminal.previous[row] : nullptr;
+        if (previous != nullptr && line.text == previous->text && line.reverse == previous->reverse)
         {
-            output += std::format("\033[{};1H\033[0m\033[2K", row + 1);
-            if (line.reverse)
+            continue;
+        }
+        if (line.reverse != reverse)
+        {
+            output += line.reverse ? "\033[7m" : "\033[0m";
+            reverse = line.reverse;
+        }
+        if (previous == nullptr || line.reverse != previous->reverse ||
+            !ascii_text(line.text) || !ascii_text(previous->text))
+        {
+            move_cursor(output, row, 0, cursor_row, cursor_column);
+            bool ascii = ascii_text(line.text);
+            if (!ascii)
             {
-                output += "\033[7m";
+                output += "\033[2K";
             }
             output += line.text;
+            if (ascii && line.text.size() < static_cast<size_t>(terminal.width))
+            {
+                output += "\033[K";
+            }
+            // Multibyte text has display widths different from its byte count.
+            cursor_column = ascii ? std::min(terminal.width - 1, static_cast<int>(line.text.size())) : -1;
+            continue;
+        }
+        size_t limit  = std::max(line.text.size(), previous->text.size());
+        size_t column = 0;
+        while (column < limit)
+        {
+            if (cell(line.text, column) == cell(previous->text, column))
+            {
+                ++column;
+                continue;
+            }
+            size_t begin = column++;
+            size_t end   = column;
+            // Rewriting short unchanged gaps is cheaper than another cursor command.
+            while (column < limit && column - end < 8)
+            {
+                if (cell(line.text, column) != cell(previous->text, column))
+                {
+                    end = column + 1;
+                }
+                ++column;
+            }
+            move_cursor(output, row, static_cast<int>(begin), cursor_row, cursor_column);
+            if (!line.reverse && begin >= line.text.size())
+            {
+                output += "\033[K";
+                break;
+            }
+            size_t text_end = std::min(end, line.text.size());
+            if (text_end > begin)
+            {
+                output.append(line.text, begin, text_end - begin);
+            }
+            if (end > text_end)
+            {
+                output.append(end - text_end, ' ');
+            }
+            cursor_column = std::min(terminal.width - 1, static_cast<int>(end));
+            column        = end;
         }
     }
-    if (!output.empty())
+    if (output.size() != start)
     {
-        output += "\033[0m";
+        if (reverse)
+        {
+            output += "\033[0m";
+        }
+        if (terminal.synchronized_output)
+        {
+            output += "\033[?2026l";
+        }
         if (!write_output(output, error))
         {
             return false;
         }
     }
-    terminal.previous = std::move(frame);
+    else
+    {
+        output.clear();
+    }
+    terminal.previous.swap(frame);
     return true;
 }
 
@@ -424,7 +573,15 @@ static bool decode_input(terminal_t& terminal, terminal_event_t& event)
                 consumed = end + 1;
                 std::string_view parameters(terminal.input.data() + 2, end - 2);
                 char             final = terminal.input[end];
-                if (terminal.input[1] == '[' && parameters.starts_with('<') && (final == 'M' || final == 'm'))
+                if (terminal.input[1] == '[' && final == 'y' && parameters.starts_with("?2026;") && parameters.ends_with('$'))
+                {
+                    if (terminal.sync_query_pending)
+                    {
+                        terminal.synchronized_output = parameters == "?2026;1$" || parameters == "?2026;2$";
+                        terminal.sync_query_pending  = false;
+                    }
+                }
+                else if (terminal.input[1] == '[' && parameters.starts_with('<') && (final == 'M' || final == 'm'))
                 {
                     sgr_mouse(parameters.substr(1), final == 'm', event);
                 }

@@ -72,6 +72,10 @@ struct terminal_t
     int                                   height       = 24;
     int                                   width        = 80;
     std::vector<terminal_row_t>           previous;
+    std::vector<terminal_row_t>           frame;
+    std::string                           output;
+    bool                                  synchronized_output = false;
+    bool                                  sync_query_pending  = false;
     std::string                           input;
     std::chrono::steady_clock::time_point partial_since{};
     bool                                  discard_sequence = false;
