@@ -97,7 +97,7 @@ static void test_input(terminal_t& terminal, int master)
     expect_event(terminal, master, "!!", terminal_event_kind_t::mouse_press);
     expect_event(terminal, master, "\033", terminal_event_kind_t::none);
     usleep(120000);
-    check(read_event(terminal).kind == terminal_event_kind_t::none, "standalone Escape expires");
+    check(read_event(terminal).kind == terminal_event_kind_t::escape, "standalone Escape produces cancellation event");
     check(terminal.input.empty(), "expired Escape is removed");
     expect_event(terminal, master, "\033[<0;", terminal_event_kind_t::none);
     usleep(120000);
@@ -194,6 +194,8 @@ struct test_screen_t
     bool reverse = false;
     std::string text;
     std::vector<bool> styles;
+    terminal_color_t foreground = terminal_color_t::normal;
+    std::vector<terminal_color_t> colors{};
 };
 
 static void apply_output(test_screen_t& screen, std::string_view output)
@@ -212,6 +214,7 @@ static void apply_output(test_screen_t& screen, std::string_view output)
             size_t cell = static_cast<size_t>(screen.y * screen.width + screen.x);
             screen.text[cell] = ch;
             screen.styles[cell] = screen.reverse;
+            screen.colors[cell] = screen.foreground;
             screen.x = std::min(screen.width - 1, screen.x + 1);
             continue;
         }
@@ -262,12 +265,25 @@ static void apply_output(test_screen_t& screen, std::string_view output)
                 size_t cell = static_cast<size_t>(screen.y * screen.width + column);
                 screen.text[cell] = ' ';
                 screen.styles[cell] = screen.reverse;
+                screen.colors[cell] = screen.foreground;
             }
         }
         else if (final == 'm')
         {
-            check(first == 0 || first == 7, "supported style");
-            screen.reverse = first == 7;
+            if (first == 0)
+            {
+                screen.reverse = false;
+                screen.foreground = terminal_color_t::normal;
+            }
+            else if (first == 7)
+            {
+                screen.reverse = true;
+            }
+            else
+            {
+                check(first == 39 || (first >= 30 && first <= 37) || (first >= 90 && first <= 97), "supported foreground");
+                screen.foreground = static_cast<terminal_color_t>(first);
+            }
         }
         else
         {
@@ -287,6 +303,18 @@ static void expect_screen(const test_screen_t& screen, const std::vector<termina
             char expected = present && static_cast<size_t>(x) < rows[y].text.size() ? rows[y].text[x] : ' ';
             check(screen.text[cell] == expected, "rendered cell matches complete frame");
             check(screen.styles[cell] == (present && rows[y].reverse), "rendered style matches complete frame");
+            auto color = present ? rows[y].foreground : terminal_color_t::normal;
+            if (present && static_cast<size_t>(x) < rows[y].text.size())
+            {
+                for (const auto& span : rows[y].colors)
+                {
+                    if (span.offset <= static_cast<size_t>(x))
+                    {
+                        color = span.color;
+                    }
+                }
+            }
+            check(screen.colors[cell] == color, "rendered foreground matches complete frame");
         }
     }
 }
@@ -299,6 +327,7 @@ static void test_differential_render(terminal_t& terminal, int master)
     bool changed = false;
     check(terminal_size(terminal, changed, error), error.c_str());
     test_screen_t screen{.width = 120, .height = 4, .text = std::string(480, ' '), .styles = std::vector<bool>(480)};
+    screen.colors.resize(480, terminal_color_t::normal);
     std::vector<terminal_row_t> rows(4);
     for (auto& row : rows)
     {
@@ -336,6 +365,36 @@ static void test_differential_render(terminal_t& terminal, int master)
     rows[3].text[119] = 'z';
     render();
     check(render().empty(), "unchanged differential frame emits no bytes");
+
+    rows[0].reverse = false;
+    rows[0].colors = {{0, terminal_color_t::bright_cyan}, {10, terminal_color_t::bright_yellow}, {119, terminal_color_t::bright_red}};
+    auto header = render();
+    check(header.find("\033[0m\033[39m") != std::string::npos, "colored header fully resets before default foreground");
+    check(render().empty(), "unchanged colored header emits no bytes");
+    rows[1].foreground = terminal_color_t::green;
+    auto selected = render();
+    check(selected.find("\033[0m\033[32m") != std::string::npos, "first selection fully resets before ordinary green");
+    rows[1].text = "selected";
+    render();
+    rows[1].text[0] = 'S';
+    render();
+    rows[1].foreground = terminal_color_t::normal;
+    rows[2].foreground = terminal_color_t::green;
+    auto moved = render();
+    check(moved.find("\033[0m\033[32m") != std::string::npos, "later selection uses the same normal-intensity green");
+    rows[0].colors.clear();
+    rows[2].foreground = terminal_color_t::normal;
+    render();
+    for (int color = 0; color < 16; ++color)
+    {
+        rows[1].foreground = static_cast<terminal_color_t>(color < 8 ? 30 + color : 90 + color - 8);
+        rows[1].reverse = color % 2 != 0;
+        auto colored = render();
+        check(colored.ends_with("\033[0m"), "colored frame restores terminal style");
+    }
+    rows[1].foreground = terminal_color_t::normal;
+    rows[1].reverse = false;
+    render();
 
     uint32_t random = 12345;
     for (int frame = 0; frame < 200; ++frame)

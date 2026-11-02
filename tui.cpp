@@ -273,7 +273,8 @@ int tui(top_t& top)
                         int  output_row_index = row == 0 ? 0 : row + scroll_offset;
                         bool row_is_selected  = row > 0 && output[output_row_index].pid == selected_pid && (output[output_row_index].thread ? output[output_row_index].tid == selected_tid : selected_tid == -1);
                         frame[row].text       = output[output_row_index].text;
-                        frame[row].reverse    = row == 0 || row_is_selected;
+                        frame[row].foreground = row_is_selected ? terminal_color_t::blue : terminal_color_t::normal;
+                        frame[row].colors.clear();
                     }
                     if (!terminal_render(terminal, frame, error))
                     {
@@ -312,7 +313,7 @@ int tui(top_t& top)
                             bool        was_selected = selected_pid == pressed_row.pid && (pressed_row.thread ? selected_tid == pressed_row.tid : selected_tid == -1);
                             pressed_pid              = pressed_row.pid;
                             pressed_tid              = pressed_row.tid;
-                            toggle_on_release        = was_selected && !pressed_row.thread && pressed_row.threads > 0;
+                            toggle_on_release        = was_selected && pressed_row.threads > 0;
                             selected_pid             = pressed_row.pid;
                             selected_tid             = pressed_row.thread ? pressed_row.tid : -1;
                             redraw                   = true;
@@ -323,10 +324,13 @@ int tui(top_t& top)
                         if (toggle_on_release && input.y > 0 && input.y < visible_line_count && input.x >= 0 && input.x < width)
                         {
                             const auto& released_row = output[input.y + scroll_offset];
-                            if (!released_row.thread && released_row.pid == pressed_pid && released_row.tid == pressed_tid && selected_pid == released_row.pid && selected_tid == -1)
+                            if (released_row.pid == pressed_pid && released_row.tid == pressed_tid && selected_pid == released_row.pid &&
+                                selected_tid == (released_row.thread ? released_row.tid : -1))
                             {
                                 toggle_threads(expanded, released_row.pid, top.previous.at(released_row.pid).first_seen);
-                                output = lines(snapshot, expanded);
+                                selected_tid = -1;
+                                output       = lines(snapshot, expanded);
+                                move_selection(output, 0, visible_rows, selected_pid, selected_tid, scroll_offset);
                                 redraw = true;
                             }
                         }
@@ -334,6 +338,15 @@ int tui(top_t& top)
                         pressed_tid       = -1;
                         toggle_on_release = false;
                     }
+                }
+                else if (input.kind == terminal_event_kind_t::escape)
+                {
+                    selected_pid      = -1;
+                    selected_tid      = -1;
+                    pressed_pid       = -1;
+                    pressed_tid       = -1;
+                    toggle_on_release = false;
+                    redraw            = true;
                 }
                 else if (input.kind == terminal_event_kind_t::redraw)
                 {
@@ -344,13 +357,15 @@ int tui(top_t& top)
                     move_selection(output, input.kind == terminal_event_kind_t::up ? -1 : 1, visible_rows, selected_pid, selected_tid, scroll_offset);
                     redraw = true;
                 }
-                else if (input.kind == terminal_event_kind_t::character && input.character == ' ' && selected_tid == -1)
+                else if (input.kind == terminal_event_kind_t::character && input.character == ' ')
                 {
                     auto expandable_process = std::ranges::find_if(snapshot.processes, [&](const process_t& p) { return p.pid == selected_pid && p.threads > 0; });
                     if (expandable_process != snapshot.processes.end())
                     {
                         toggle_threads(expanded, selected_pid, top.previous.at(selected_pid).first_seen);
-                        output = lines(snapshot, expanded);
+                        selected_tid = -1;
+                        output       = lines(snapshot, expanded);
+                        move_selection(output, 0, visible_rows, selected_pid, selected_tid, scroll_offset);
                         redraw = true;
                     }
                 }

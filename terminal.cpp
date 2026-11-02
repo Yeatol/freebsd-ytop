@@ -335,6 +335,22 @@ static char cell(std::string_view text, size_t column)
     return column < text.size() ? text[column] : ' ';
 }
 
+static void set_foreground(std::string& output, terminal_color_t color, terminal_color_t& current, bool reverse)
+{
+    if (color != current)
+    {
+        // Xshell needs a full reset when leaving a bright foreground.
+        output += "\033[0m\033[";
+        output += std::to_string(static_cast<int>(color));
+        output += 'm';
+        if (reverse)
+        {
+            output += "\033[7m";
+        }
+        current = color;
+    }
+}
+
 bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& rows, std::string& error)
 {
     auto& frame  = terminal.frame;
@@ -349,19 +365,30 @@ bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& ro
     int    cursor_row    = -2;
     int    cursor_column = -1;
     bool   reverse       = false;
+    auto   foreground    = terminal_color_t::normal;
     for (int row = 0; row < terminal.height; ++row)
     {
-        auto& line   = frame[row];
-        bool  ascii  = true;
-        line.reverse = false;
+        auto& line      = frame[row];
+        bool  ascii     = true;
+        line.reverse    = false;
+        line.foreground = terminal_color_t::normal;
+        line.colors.clear();
         line.text.clear();
         if (static_cast<size_t>(row) < rows.size())
         {
-            line.reverse = rows[row].reverse;
-            ascii        = display_text(rows[row].text, terminal.width, line.reverse, line.text);
+            line.reverse    = rows[row].reverse;
+            line.foreground = rows[row].foreground;
+            line.colors     = rows[row].colors;
+            ascii           = display_text(rows[row].text, terminal.width, line.reverse, line.text);
+            if (!line.colors.empty() && (!ascii || !std::ranges::is_sorted(line.colors, {}, &terminal_color_span_t::offset)))
+            {
+                error = "color spans require sanitized ASCII text and ordered byte offsets";
+                return false;
+            }
         }
         const auto* previous = static_cast<size_t>(row) < terminal.previous.size() ? &terminal.previous[row] : nullptr;
-        if (previous != nullptr && line.text == previous->text && line.reverse == previous->reverse)
+        if (previous != nullptr && line.text == previous->text && line.reverse == previous->reverse &&
+            line.foreground == previous->foreground && line.colors == previous->colors)
         {
             continue;
         }
@@ -369,8 +396,14 @@ bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& ro
         {
             output += line.reverse ? "\033[7m" : "\033[0m";
             reverse = line.reverse;
+            if (!reverse)
+            {
+                foreground = terminal_color_t::normal;
+            }
         }
+        set_foreground(output, line.foreground, foreground, reverse);
         if (previous == nullptr || line.reverse != previous->reverse ||
+            line.foreground != previous->foreground || line.colors != previous->colors || !line.colors.empty() ||
             !ascii || !ascii_text(previous->text))
         {
             move_cursor(output, row, 0, cursor_row, cursor_column);
@@ -378,7 +411,19 @@ bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& ro
             {
                 output += "\033[2K";
             }
-            output += line.text;
+            size_t offset = 0;
+            for (const auto& span : line.colors)
+            {
+                if (span.offset >= line.text.size())
+                {
+                    break;
+                }
+                output.append(line.text, offset, span.offset - offset);
+                set_foreground(output, span.color, foreground, reverse);
+                offset = span.offset;
+            }
+            output.append(line.text, offset);
+            set_foreground(output, line.foreground, foreground, reverse);
             if (ascii && line.text.size() < static_cast<size_t>(terminal.width))
             {
                 output += "\033[K";
@@ -428,7 +473,7 @@ bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& ro
     }
     if (output.size() != start)
     {
-        if (reverse)
+        if (reverse || foreground != terminal_color_t::normal)
         {
             output += "\033[0m";
         }
@@ -651,6 +696,7 @@ bool terminal_read(terminal_t& terminal, terminal_event_t& event, int timeout_ms
                 if (terminal.input.size() == 1)
                 {
                     terminal.input.clear();
+                    event.kind = terminal_event_kind_t::escape;
                 }
                 terminal.partial_since = {};
                 return true;

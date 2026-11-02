@@ -38,9 +38,10 @@ access is not required when the system permits access.
 | Input | Action |
 | --- | --- |
 | `Up` / `Down` | Move the selection by one displayed row, including thread rows. Selection does not wrap; the list scrolls to keep it visible. With no selection, `Down` selects the first visible row and `Up` selects the last visible row. |
-| `Space` | For a selected multi-threaded process, expand or collapse its thread rows. For a selected single-threaded process, show or hide its main thread's context-switch counts. Does nothing on a thread row or when nothing is selected. |
-| Left-click | Select a process. Clicking the already selected process toggles its thread rows when it has more than one thread, or toggles its main thread's context-switch counts when it has one thread. Clicking the header or blank space does not change the selection. |
+| `Space` | For a selected multi-threaded process, expand or collapse its thread rows. For a selected single-threaded process, show or hide its main thread's context-switch counts. On a selected thread row, collapse its parent process and select the parent row, keeping it visible. Does nothing when nothing is selected. |
+| Left-click | Select a process or thread. Clicking the already selected process toggles its thread rows when it has more than one thread, or toggles its main thread's context-switch counts when it has one thread. Clicking an already selected thread collapses its parent process and selects the parent row, keeping it visible. Clicking the header or blank space does not change the selection. |
 | Mouse wheel | Scroll three rows per step. Scrolling is bounded by the list and adjusted when rows disappear or collapse. |
+| `Esc` | Clear the selection without collapsing expanded processes or changing the scroll position. |
 | `q` / `Ctrl+C` | Quit and restore the terminal. |
 
 Other keyboard input is ignored. Terminal resizing is supported. Escape keys and
@@ -74,6 +75,13 @@ text is clipped at character boundaries.
 Only the process table is displayed, with its header on the first line. The
 header stays fixed while scrolling. Load averages, process summaries, and
 keyboard hints are not shown.
+Header fields use the terminal's default text color; the selected row uses ANSI blue;
+backgrounds remain unchanged.
+Colors use the terminal's 16-color palette, so their appearance depends on its
+theme. Header and selection highlighting do not use reverse video.
+Foreground changes fully reset rendition before applying the color and any
+reverse-video attribute. This avoids bright colors leaking into subsequent text
+on terminals such as Xshell where clearing intensity alone is insufficient.
 
 Columns follow FreeBSD `top`, with a TID column after PID:
 

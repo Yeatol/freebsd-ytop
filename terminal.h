@@ -39,6 +39,7 @@ enum class terminal_event_kind_t
 {
     none,
     redraw,
+    escape,
     character,
     up,
     down,
@@ -56,10 +57,42 @@ struct terminal_event_t
     int                   y         = 0;
 };
 
+enum class terminal_color_t
+{
+    normal = 39,
+    black  = 30,
+    red,
+    green,
+    yellow,
+    blue,
+    magenta,
+    cyan,
+    white,
+    bright_black = 90,
+    bright_red,
+    bright_green,
+    bright_yellow,
+    bright_blue,
+    bright_magenta,
+    bright_cyan,
+    bright_white
+};
+
+struct terminal_color_span_t
+{
+    size_t           offset = 0;
+    terminal_color_t color  = terminal_color_t::normal;
+
+    bool operator==(const terminal_color_span_t&) const = default;
+};
+
 struct terminal_row_t
 {
-    std::string text;
-    bool        reverse = false;
+    std::string      text;
+    bool             reverse    = false;
+    terminal_color_t foreground = terminal_color_t::normal;
+    // Byte offsets in sanitized ASCII text; colored spans require ASCII rows.
+    std::vector<terminal_color_span_t> colors{};
 };
 
 struct terminal_t
