@@ -73,9 +73,10 @@ text is clipped at character boundaries.
 
 ## Display
 
-Only the process table is displayed, with its header on the first line. The
-header stays fixed while scrolling. Load averages, process summaries, and
-keyboard hints are not shown.
+The process table has a fixed header on the first line. All remaining rows,
+including the bottom line, are available for processes and threads.
+There is no bottom status bar. A one-row terminal shows only the header.
+Load averages, process summaries, and keyboard hints are not shown.
 Header fields use the terminal's default text color; the selected row uses ANSI blue;
 backgrounds remain unchanged.
 Colors use the terminal's 16-color palette, so their appearance depends on its
@@ -115,7 +116,8 @@ TID on that row is `ki_tid` of the representative thread returned by
 Expand a process to show its threads underneath it. Expanded rows are obtained
 from `kvm_getprocs(KERN_PROC_ALL)` and are sorted by TID within each process.
 The TID already shown on the parent row is omitted from the child rows. Thread
-rows use `->` in the PID column and can be selected without toggling the parent.
+rows show their parent process's PID in the PID column and can be selected
+without toggling the parent.
 Multiple processes can remain expanded at once. Expansion persists across
 refreshes and is cleared when a process disappears from a sample or its
 accumulated runtime decreases. PID reuse between samples is not detected if

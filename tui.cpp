@@ -71,7 +71,7 @@ struct display_row_t
 
 static std::string process_line(const process_t& p, bool thread, const process_t& command_source, bool show_context_switches = false)
 {
-    std::string pid     = thread ? "  ->" : std::to_string(p.pid);
+    std::string pid     = std::to_string(p.pid);
     std::string cpu     = p.cpu < 0 ? "-" : std::to_string(p.cpu);
     std::string threads = thread ? "-" : std::to_string(p.threads);
     std::string row     = std::format(
@@ -276,11 +276,13 @@ int tui(top_t& top)
                     frame.resize(static_cast<size_t>(visible_line_count));
                     for (int row = 0; row < visible_line_count; ++row)
                     {
+                        frame[row].reverse    = false;
+                        frame[row].foreground = terminal_color_t::normal;
+                        frame[row].colors.clear();
                         int  output_row_index = row == 0 ? 0 : row + scroll_offset;
                         bool row_is_selected  = row > 0 && output[output_row_index].pid == selected_pid && (output[output_row_index].thread ? output[output_row_index].tid == selected_tid : selected_tid == -1);
                         frame[row].text       = output[output_row_index].text;
                         frame[row].foreground = row_is_selected ? terminal_color_t::blue : terminal_color_t::normal;
-                        frame[row].colors.clear();
                     }
                     if (!terminal_render(terminal, frame, error))
                     {
