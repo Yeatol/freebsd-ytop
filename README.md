@@ -39,7 +39,9 @@ not be `dumb`.
 Live-process access follows FreeBSD permissions and jail visibility rules; root
 access is not required when the system permits access.
 
-Command-line arguments are ignored without a message.
+Run `ytop` without arguments. CPU bars always use real system measurements.
+Command-line arguments report usage and exit with an error before opening
+the terminal.
 
 ## Controls
 
@@ -74,7 +76,8 @@ Rendering reuses frame/output buffers and skips unchanged rows. The terminal
 module supports changed-span updates for plain ASCII rows, merging nearby
 changes to reduce cursor and style commands. Rows with a right-side CPU bar,
 color spans, or multibyte text use whole-row updates when changed. The TUI
-uses plain ASCII rows without CPU bars, enabling changed-span updates.
+uses plain ASCII table rows, enabling changed-span updates; colored CPU grid
+rows use whole-row updates when changed.
 No terminfo library is used.
 The terminal is queried for synchronized-output mode (DEC mode 2026); frames
 are bracketed only after a response confirms support. Terminals that do not
@@ -88,7 +91,43 @@ usernames, and wait-channel text with `?` before they reach the renderer.
 ## Display
 
 There is no right-side CPU bar.
-The process table header stays fixed on the first line.
+Thread detail mode shows logical CPU bars above the table in a responsive grid,
+as `  0[||||||||||]`, without a space before `[`. CPU IDs are right-aligned in a fixed width of three;
+the layout targets up to 256 logical CPUs (IDs 0 through 255),
+without a `CPU` prefix. The grid uses at least two columns when there are two
+or more CPUs and the terminal is wide enough. The preferred column count is
+the integer square root of the CPU count (at least two), limited by screen
+width at roughly 30 terminal columns per CPU. Within that limit, the largest
+column count that divides the CPU count is preferred, avoiding empty slots.
+If no divisor of at least two fits, two columns are used when possible,
+leaving at most one empty slot. For example, 8 CPUs use four rows and two
+columns, 10 CPUs use five rows and two columns, and 12 CPUs use four rows
+and three columns. All CPU bars have the same length, calculated from the
+narrowest column and fixed three-character CPU ID; leftover width remains blank rather than
+extending the last bar. Each closing bracket is immediately followed by the
+next three-character CPU ID, without extra column padding. Unused width is left
+at the right edge. The CPU grid reserves at least one blank cell at the
+terminal's right edge; the process/thread table still uses the full width. Narrow terminals
+fall back to one column. CPUs are ordered top to bottom, then left to right.
+Column heights are balanced, differing by at most one CPU; any extra CPUs
+are assigned to the leftmost columns.
+Green represents user plus nice,
+red system time, and yellow interrupts; idle capacity uses gray `|` characters.
+CPU IDs and brackets use ANSI bright black (gray). Cumulative
+segment boundaries are rounded to the nearest cell. These are whole-CPU
+measurements, not usage attributable only to the selected process.
+A blank line precedes the CPU grid, and another separates it from the table.
+The CPU area, including both blank lines, never exceeds half the terminal height
+(rounded down). Columns increase when necessary, preferring divisors of the
+CPU count, even if this makes bars narrower. Showing all CPUs takes priority over
+avoiding empty slots. Dense layouts shorten bars,
+reducing each CPU to its three-character ID, brackets and at least one bar cell.
+If even this minimum cannot fit, excess rows are clipped; enlarge the terminal
+to see all CPUs. Terminals shorter than six rows hide the grid.
+Clicking CPU rows or the table header does not select
+a thread. The process list never shows CPU bars.
+The table header stays fixed below the CPU bars (on the first line when no CPU
+grid is displayed).
 All rows below the header are available for processes and threads.
 The table uses the full terminal width.
 Load averages, process summaries, and keyboard hints are not shown.
@@ -240,7 +279,7 @@ from `CPU`.
 
 `top_sample` accepts an optional detail PID (`-1` for the process list) and
 collects whole-system and per-CPU data. These system CPU summaries are retained
-in the sampling API but are not displayed by the TUI.
+in the sampling API; per-CPU data is displayed above the thread table.
 Like FreeBSD `top`, it sizes the per-CPU buffer using
 `kern.smp.maxcpus`, reads `kern.cp_times`, and omits CPU slots whose counters
 are all zero. `snapshot.cpus` retains the actual CPU IDs in ascending order,

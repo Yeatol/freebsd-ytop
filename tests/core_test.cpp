@@ -164,8 +164,171 @@ static void test_selection()
     check(tid == 109, "empty table does not index a data row");
 }
 
+static void cpu_fixture(std::vector<cpu_t>& cpus, int count)
+{
+    cpus.resize(static_cast<size_t>(count));
+    for (int id = 0; id < count; ++id)
+    {
+        cpus[id] = {};
+        cpus[id].id = id;
+        cpus[id].percent_tenths[CP_USER] = 1000;
+    }
+}
+
 static void test_cpu()
 {
+    std::vector<cpu_t> simulated;
+    check(cpu_prefix_rows(12, 120, 80) == 6 && cpu_prefix_rows(12, 80, 24) == 8,
+          "CPU prefix reserves top and bottom blank lines");
+    check(cpu_prefix_rows(12, 120, 5) == 0 && cpu_prefix_rows(12, 120, 4) == 0 &&
+          cpu_prefix_rows(0, 120, 80) == 0, "short terminal preserves table header and data");
+    check(cpu_columns(24, 120, 16) == 4 && cpu_prefix_rows(24, 120, 16) == 8,
+          "CPU layout adds columns to fit half the screen without gaps");
+    check(cpu_columns(12, 120, 8) == 6 && cpu_prefix_rows(12, 120, 8) == 4,
+          "short CPU area expands columns before clipping");
+    check(cpu_columns(128, 120, 24) == 16 && cpu_prefix_rows(128, 120, 24) == 10,
+          "dense CPU layout fits all cores within half the screen");
+    cpu_fixture(simulated, 128);
+    auto dense = cpu_grid_line(simulated, 7, 16, 120);
+    check(dense.text.size() == 112 && dense.text.substr(105).starts_with("127["),
+          "compact grid displays the final CPU without clipping");
+    check(cpu_columns(127, 120, 24) == 13,
+          "showing all CPUs takes priority over avoiding grid gaps");
+    cpu_fixture(simulated, 256);
+    int max_columns = cpu_columns(256, 120, 40);
+    auto max_grid = cpu_grid_line(simulated, 15, max_columns, 120);
+    check(max_columns == 16 && max_grid.text.find("255[") != std::string::npos &&
+          max_grid.text.size() <= 120 && cpu_prefix_rows(256, 120, 40) <= 20,
+          "256 CPUs retain three-character IDs and equal-width compact bars");
+    for (int height = 1; height <= 81; ++height)
+    {
+        for (int width : {2, 15, 80, 120})
+        {
+            check(cpu_prefix_rows(128, width, height) <= height / 2,
+                  "CPU area including blank lines never exceeds half the screen");
+        }
+    }
+    cpu_t bar_cpu;
+    bar_cpu.id = 7;
+    bar_cpu.percent_tenths[CP_USER] = 200;
+    bar_cpu.percent_tenths[CP_NICE] = 100;
+    bar_cpu.percent_tenths[CP_SYS] = 200;
+    bar_cpu.percent_tenths[CP_INTR] = 100;
+    auto bar = cpu_line(bar_cpu);
+    check(bar.text == "  7[||||||||||]", "CPU ID is right aligned and idle cells are filled");
+    check(bar.colors.size() == 5 && bar.colors[0].offset == 0 &&
+          bar.colors[1].offset == 4 && bar.colors[2].offset == 7 &&
+          bar.colors[3].offset == 9 && bar.colors[4].offset == 10 &&
+          bar.colors[0].color == terminal_color_t::bright_black &&
+          bar.colors[1].color == terminal_color_t::green &&
+          bar.colors[2].color == terminal_color_t::red &&
+          bar.colors[3].color == terminal_color_t::yellow &&
+          bar.colors[4].color == terminal_color_t::bright_black, "CPU IDs and brackets are gray while usage retains its colors");
+    bar_cpu.percent_tenths = {};
+    auto idle = cpu_line(bar_cpu);
+    check(idle.text == "  7[||||||||||]" && idle.colors.size() == 2 &&
+          idle.colors.back().offset == 4 &&
+          idle.colors.back().color == terminal_color_t::bright_black, "idle CPU bar is filled with gray pipes");
+    bar_cpu.id = 123;
+    bar_cpu.percent_tenths[CP_USER] = 334;
+    bar_cpu.percent_tenths[CP_SYS] = 334;
+    bar_cpu.percent_tenths[CP_INTR] = 333;
+    bar = cpu_line(bar_cpu);
+    check(bar.text == "123[||||||||||]" && bar.colors.back().offset == 14,
+          "rounded full CPU usage does not overflow ten cells");
+    bar_cpu.percent_tenths = {};
+    bar_cpu.percent_tenths[CP_SYS] = 49;
+    check(cpu_line(bar_cpu).colors.size() == 2, "sub-half-cell usage rounds down to gray idle cells");
+    bar_cpu.percent_tenths[CP_SYS] = 50;
+    bar = cpu_line(bar_cpu);
+    check(bar.text == "123[||||||||||]" && bar.colors[1].color == terminal_color_t::red &&
+          bar.colors.back().offset == 5 && bar.colors.back().color == terminal_color_t::bright_black,
+          "half-cell system usage rounds up with no empty user span");
+    std::vector<cpu_t> cpus(8);
+    for (size_t i = 0; i < cpus.size(); ++i)
+    {
+        cpus[i].id = static_cast<int>(i);
+        cpus[i].percent_tenths[CP_USER] = 1000;
+    }
+    check(cpu_columns(8, 120) == 2 && cpu_columns(8, 80) == 2 &&
+          cpu_columns(8, 240) == 2 && cpu_columns(12, 120) == 3 &&
+          cpu_columns(16, 120) == 4 &&
+          cpu_columns(2, 120) == 2 && cpu_columns(1, 120) == 1 &&
+          cpu_columns(8, 11) == 1, "CPU columns adapt to screen width and core count");
+    check(cpu_columns(10, 120) == 2 && cpu_columns(18, 120) == 3 &&
+          cpu_columns(20, 120) == 4 && cpu_columns(25, 120) == 2 &&
+          cpu_columns(25, 150) == 5 && cpu_columns(12, 80) == 2 &&
+          cpu_columns(13, 120) == 2, "CPU grid prefers divisors and minimizes unavoidable empty slots");
+    for (int count = 2; count <= 128; ++count)
+    {
+        int columns = cpu_columns(count, 120);
+        int rows = (count + columns - 1) / columns;
+        check(rows * columns - count <= 1, "CPU grid leaves at most one empty slot");
+    }
+    for (int width : {16, 40, 79, 80, 120, 121})
+    {
+        int columns = cpu_columns(8, width);
+        int rows = (8 + columns - 1) / columns;
+        for (int row = 0; row < rows; ++row)
+        {
+            auto grid = cpu_grid_line(cpus, row, columns, width);
+            check(grid.text.size() <= static_cast<size_t>(width), "CPU grid fits screen width");
+            size_t previous = 0;
+            for (auto span : grid.colors)
+            {
+                check(span.offset >= previous && span.offset < grid.text.size(), "grid color offsets remain ordered and valid");
+                previous = span.offset;
+            }
+        }
+        auto grid = cpu_grid_line(cpus, 0, columns, width);
+        size_t bar_width = std::string::npos;
+        size_t position = 0;
+        for (int column = 0; column < columns; ++column)
+        {
+            size_t open = grid.text.find('[', position);
+            size_t close = grid.text.find(']', open);
+            check(open != std::string::npos && close != std::string::npos, "each CPU bar has brackets");
+            if (column == 0)
+            {
+                bar_width = close - open;
+            }
+            check(close - open == bar_width, "all CPU bars have equal widths including final column");
+            if (column + 1 < columns)
+            {
+                check(grid.text[close + 4] == '[', "next three-character CPU ID directly follows closing bracket");
+            }
+            position = close + 1;
+        }
+    }
+    auto grid = cpu_grid_line(cpus, 3, cpu_columns(8, 120), 120);
+    for (int screen_width : {40, 79, 80, 120, 121})
+    {
+        int cpu_width = screen_width - 1;
+        auto padded = cpu_grid_line(cpus, 0, cpu_columns(8, cpu_width, 24), cpu_width);
+        check(padded.text.size() <= static_cast<size_t>(screen_width - 1),
+              "CPU grid reserves at least one blank cell at screen right");
+    }
+    check(cpu_prefix_rows(8, 120, 80) == 6 && grid.text.starts_with("  3[") &&
+          grid.text.substr(60, 4) == "  7[",
+          "eight CPUs form four rows and two columns ordered vertically");
+    cpu_fixture(cpus, 12);
+    grid = cpu_grid_line(cpus, 0, cpu_columns(12, 120), 120);
+    check(grid.text.starts_with("  0[") && grid.text.substr(40, 4) == "  4[" &&
+          grid.text.substr(80, 4) == "  8[",
+          "twelve CPUs form four rows and three equal-height columns");
+    cpu_fixture(cpus, 10);
+    grid = cpu_grid_line(cpus, 0, 4, 120);
+    check(grid.text.starts_with("  0[") && grid.text.substr(30, 4) == "  3[" &&
+          grid.text.substr(60, 4) == "  6[" && grid.text.substr(90, 4) == "  8[",
+          "uneven CPU counts are balanced across columns");
+    grid = cpu_grid_line(cpus, 2, 4, 120);
+    check(grid.text.starts_with("  2[") && grid.text.substr(30, 4) == "  5[" &&
+          grid.text.size() == 60, "only longer columns contain a final CPU");
+    cpu_t full_cpu{};
+    full_cpu.id = 0;
+    full_cpu.percent_tenths[CP_USER] = 1000;
+    check(cpu_line(full_cpu, 20).text == "  0[||||||||||||||||||||]",
+          "CPU proportions scale to variable bar width");
     check(counter_rate(25, 10, 2000000) == 7.5, "switch rate uses actual elapsed seconds");
     check(counter_rate(10, 10, 500000) == 0.0, "unchanged switch counter gives zero rate");
     check(!counter_rate(9, 10, 1000000).has_value(), "decreased switch counter has no rate");

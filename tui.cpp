@@ -331,6 +331,106 @@ static void move_selection(const std::vector<display_row_t>& output, int directi
     }
 }
 
+static terminal_row_t cpu_line(const cpu_t& cpu, int cells = 10)
+{
+    terminal_row_t row;
+    row.text = std::format("{:>3}[", cpu.id);
+    row.colors.push_back({0, terminal_color_t::bright_black});
+    const size_t               start    = row.text.size();
+    const int                  usage[]  = {cpu.percent_tenths[CP_USER] + cpu.percent_tenths[CP_NICE],
+                                           cpu.percent_tenths[CP_SYS], cpu.percent_tenths[CP_INTR]};
+    constexpr terminal_color_t colors[] = {terminal_color_t::green, terminal_color_t::red, terminal_color_t::yellow};
+    int                        total    = 0;
+    size_t                     filled   = 0;
+    for (size_t i = 0; i < std::size(usage); ++i)
+    {
+        total += usage[i];
+        size_t end = static_cast<size_t>((static_cast<int64_t>(std::clamp(total, 0, 1000)) * cells + 500) / 1000);
+        if (end > filled)
+        {
+            row.colors.push_back({start + filled, colors[i]});
+            row.text.append(end - filled, '|');
+            filled = end;
+        }
+    }
+    row.colors.push_back({start + filled, terminal_color_t::bright_black});
+    row.text.append(static_cast<size_t>(cells) - filled, '|');
+    row.text += ']';
+    return row;
+}
+
+static int cpu_columns(int count, int width, int height = 0)
+{
+    int fitting   = std::max(1, width / 6);
+    int preferred = 1;
+    while (preferred + 1 <= count / (preferred + 1))
+    {
+        ++preferred;
+    }
+    int columns           = std::min({std::max(1, count), fitting, std::max(2, width / 30), std::max(2, preferred)});
+    int preferred_columns = columns;
+    columns               = std::min(columns, 2);
+    for (int candidate = preferred_columns; candidate >= 2; --candidate)
+    {
+        if (count % candidate == 0)
+        {
+            columns = candidate;
+            break;
+        }
+    }
+    int max_rows = std::max(0, height / 2 - 2);
+    if (max_rows > 0 && (count + columns - 1) / columns > max_rows)
+    {
+        int needed = (count + max_rows - 1) / max_rows;
+        int limit  = std::min(std::max(1, count), std::max(1, width / 6));
+        for (int candidate = needed; candidate <= limit; ++candidate)
+        {
+            if (count % candidate == 0)
+            {
+                return candidate;
+            }
+        }
+        return std::min(needed, limit);
+    }
+    return columns;
+}
+
+static int cpu_prefix_rows(int count, int width, int height)
+{
+    int columns = cpu_columns(count, width, height);
+    int rows    = std::min((count + columns - 1) / columns, std::max(0, height / 2 - 2));
+    return rows > 0 ? rows + 2 : 0;
+}
+
+static terminal_row_t cpu_grid_line(const std::vector<cpu_t>& cpus, int row, int columns, int width)
+{
+    terminal_row_t result;
+    size_t         base_rows    = cpus.size() / static_cast<size_t>(columns);
+    size_t         extra_rows   = cpus.size() % static_cast<size_t>(columns);
+    int            column_width = width / columns;
+    int            cells        = std::max(0, column_width - 5);
+    for (int column = 0; column < columns; ++column)
+    {
+        size_t column_index = static_cast<size_t>(column);
+        size_t column_rows  = base_rows + (column_index < extra_rows ? 1 : 0);
+        if (static_cast<size_t>(row) >= column_rows)
+        {
+            break;
+        }
+        size_t index = column_index * base_rows + std::min(column_index, extra_rows) + static_cast<size_t>(row);
+        int    start = column * column_width;
+        auto   bar   = cpu_line(cpus[index], cells);
+        result.text.resize(static_cast<size_t>(start), ' ');
+        for (auto span : bar.colors)
+        {
+            span.offset += result.text.size();
+            result.colors.push_back(span);
+        }
+        result.text += bar.text;
+    }
+    return result;
+}
+
 int tui(top_t& top)
 {
     std::string error;
@@ -383,7 +483,7 @@ int tui(top_t& top)
                 toggle_on_release    = false;
                 refresh();
             };
-            auto exit_detail = [&](int visible_rows) {
+            auto exit_detail = [&] {
                 int target_pid    = filtered_pid;
                 selected_pid      = -1;
                 selected_tid      = -1;
@@ -399,7 +499,7 @@ int tui(top_t& top)
                 selected_pid = top.previous.contains(target_pid) ? target_pid : -1;
                 if (selected_pid != -1)
                 {
-                    move_selection(display_output, 0, visible_rows, selected_pid, selected_tid, scroll_offset);
+                    move_selection(display_output, 0, std::max(0, terminal.height - 1), selected_pid, selected_tid, scroll_offset);
                 }
                 redraw = true;
             };
@@ -435,7 +535,13 @@ int tui(top_t& top)
                 int width              = terminal.width;
                 int total_rows         = static_cast<int>(display_output.size()) - 1;
                 int table_width        = width;
-                int visible_rows       = std::max(0, height - 1);
+                int cpu_width          = std::max(0, width - 1);
+                int cpu_count          = static_cast<int>(snapshot.cpus.size());
+                int columns            = cpu_columns(cpu_count, cpu_width, height);
+                int table_start        = filtered_pid == -1 ? 0 : cpu_prefix_rows(cpu_count, cpu_width, height);
+                int cpu_rows           = std::max(0, table_start - 2);
+                int cpu_start          = cpu_rows > 0 ? 1 : 0;
+                int visible_rows       = std::max(0, height - table_start - 1);
                 int max_offset         = std::max(0, total_rows - visible_rows);
                 scroll_offset          = std::clamp(scroll_offset, 0, max_offset);
                 int visible_line_count = std::min(visible_rows, total_rows - scroll_offset) + 1;
@@ -447,8 +553,13 @@ int tui(top_t& top)
                         frame[row].reverse    = false;
                         frame[row].foreground = terminal_color_t::normal;
                         frame[row].colors.clear();
-                        int table_row = row;
-                        if (table_row >= visible_line_count)
+                        if (row >= cpu_start && row < cpu_start + cpu_rows)
+                        {
+                            frame[row] = cpu_grid_line(snapshot.cpus, row - cpu_start, columns, cpu_width);
+                            continue;
+                        }
+                        int table_row = row - table_start;
+                        if (table_row < 0 || table_row >= visible_line_count)
                         {
                             frame[row].text.clear();
                             continue;
@@ -487,14 +598,15 @@ int tui(top_t& top)
                 }
                 if (input.kind == terminal_event_kind_t::mouse_press || input.kind == terminal_event_kind_t::mouse_release)
                 {
+                    int table_y = input.y - table_start;
                     if (input.kind == terminal_event_kind_t::mouse_press)
                     {
                         pressed_pid       = -1;
                         pressed_tid       = -1;
                         toggle_on_release = false;
-                        if (input.y > 0 && input.y < visible_line_count && input.x >= 0 && input.x < table_width)
+                        if (table_y > 0 && table_y < visible_line_count && input.x >= 0 && input.x < table_width)
                         {
-                            const auto& pressed_row  = display_output[input.y + scroll_offset];
+                            const auto& pressed_row  = display_output[table_y + scroll_offset];
                             bool        was_selected = selected_pid == pressed_row.pid && (pressed_row.thread ? selected_tid == pressed_row.tid : selected_tid == -1);
                             pressed_pid              = pressed_row.pid;
                             pressed_tid              = pressed_row.tid;
@@ -506,9 +618,9 @@ int tui(top_t& top)
                     }
                     if (input.kind == terminal_event_kind_t::mouse_release)
                     {
-                        if (toggle_on_release && input.y > 0 && input.y < visible_line_count && input.x >= 0 && input.x < table_width)
+                        if (toggle_on_release && table_y > 0 && table_y < visible_line_count && input.x >= 0 && input.x < table_width)
                         {
-                            const auto& released_row = display_output[input.y + scroll_offset];
+                            const auto& released_row = display_output[table_y + scroll_offset];
                             if (released_row.pid == pressed_pid && released_row.tid == pressed_tid && selected_pid == released_row.pid &&
                                 selected_tid == (released_row.thread ? released_row.tid : -1))
                             {
@@ -524,7 +636,7 @@ int tui(top_t& top)
                 {
                     if (selected_pid == -1 && filtered_pid != -1)
                     {
-                        exit_detail(visible_rows);
+                        exit_detail();
                     }
                     else
                     {
@@ -551,7 +663,7 @@ int tui(top_t& top)
                 {
                     if (filtered_pid != -1)
                     {
-                        exit_detail(visible_rows);
+                        exit_detail();
                     }
                     else
                     {
