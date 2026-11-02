@@ -204,11 +204,21 @@ static std::optional<double> counter_rate(uint64_t current, uint64_t previous, u
     return static_cast<double>(current - previous) * 1000000.0 / interval_us;
 }
 
-static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, const std::unordered_map<int, previous_process_t>& previous, std::chrono::steady_clock::time_point sampled_at, sample_history_t& next_history, std::string& error)
+static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int detail_pid, const std::unordered_map<int, previous_process_t>& previous, std::chrono::steady_clock::time_point sampled_at, sample_history_t& next_history, std::string& error)
 {
-    int         count   = 0;
-    kinfo_proc* entries = kvm_getprocs(top.kernel, threads ? KERN_PROC_ALL : KERN_PROC_PROC, 0, &count);
-    if (entries == nullptr)
+    int count     = 0;
+    int operation = detail_pid == -1 ? KERN_PROC_PROC : KERN_PROC_PID;
+    if (threads)
+    {
+        operation |= KERN_PROC_INC_THREAD;
+    }
+    errno               = 0;
+    kinfo_proc* entries = kvm_getprocs(top.kernel, operation, detail_pid == -1 ? 0 : detail_pid, &count);
+    if (entries == nullptr && detail_pid != -1 && errno == ESRCH)
+    {
+        count = 0;
+    }
+    else if (entries == nullptr)
     {
         error = std::format("kvm_getprocs: {}", kvm_geterr(top.kernel));
         return false;
@@ -241,7 +251,7 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, const
         }
 
         std::string affinity;
-        if (threads)
+        if (threads && !(p.ki_flag & P_KPROC))
         {
             cpuset_t mask;
             if (cpuset_getaffinity(CPU_LEVEL_WHICH, CPU_WHICH_TID, p.ki_tid, sizeof(mask), &mask) == -1)
@@ -322,17 +332,22 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, const
             system_cpu = cpu_fraction * 100;
         }
 
-        auto username_entry = usernames.find(p.ki_ruid);
-        if (username_entry == usernames.end())
+        std::string username;
+        if (!threads)
         {
-            errno                 = 0;
-            const passwd* account = getpwuid(p.ki_ruid);
-            if (account == nullptr && errno != 0)
+            auto username_entry = usernames.find(p.ki_ruid);
+            if (username_entry == usernames.end())
             {
-                error = std::format("getpwuid: {}", std::strerror(errno));
-                return false;
+                errno                 = 0;
+                const passwd* account = getpwuid(p.ki_ruid);
+                if (account == nullptr && errno != 0)
+                {
+                    error = std::format("getpwuid: {}", std::strerror(errno));
+                    return false;
+                }
+                username_entry = usernames.emplace(p.ki_ruid, account == nullptr ? std::to_string(p.ki_ruid) : text(account->pw_name, std::strlen(account->pw_name))).first;
             }
-            username_entry = usernames.emplace(p.ki_ruid, account == nullptr ? std::to_string(p.ki_ruid) : text(account->pw_name, std::strlen(account->pw_name))).first;
+            username = username_entry->second;
         }
         std::string command = text(p.ki_comm, sizeof(p.ki_comm));
         if (threads)
@@ -356,7 +371,7 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, const
             .tid                = p.ki_tid,
             .jid                = p.ki_jid,
             .kernel_process     = kernel_process,
-            .username           = username_entry->second,
+            .username           = std::move(username),
             .threads            = p.ki_numthreads,
             .priority           = p.ki_pri.pri_level - PUSER,
             .nice               = nice(p),
@@ -463,13 +478,22 @@ static bool sample_cpus(const top_t& top, snapshot_t& snapshot, std::vector<std:
     return true;
 }
 
-bool top_sample(top_t& top, snapshot_t& snapshot, std::string& error)
+bool top_sample(top_t& top, snapshot_t& snapshot, std::string& error, int detail_pid)
 {
-    snapshot_t       next;
-    snapshot_t       threads;
-    sample_history_t process_history;
-    sample_history_t thread_history;
-    if (!sample_records(top, next, false, top.previous, top.sampled_at, process_history, error) || !sample_records(top, threads, true, top.thread_previous, top.thread_sampled_at, thread_history, error))
+    snapshot_t                                        next;
+    snapshot_t                                        threads;
+    sample_history_t                                  process_history;
+    sample_history_t                                  thread_history;
+    const bool                                        same_view = detail_pid == top.sampled_pid;
+    const std::unordered_map<int, previous_process_t> empty_history;
+    if (!sample_records(top, next, false, detail_pid, same_view ? top.previous : empty_history,
+                        same_view ? top.sampled_at : std::chrono::steady_clock::time_point{}, process_history, error))
+    {
+        return false;
+    }
+    if (detail_pid != -1 &&
+        !sample_records(top, threads, true, detail_pid, same_view ? top.thread_previous : empty_history,
+                        same_view ? top.thread_sampled_at : std::chrono::steady_clock::time_point{}, thread_history, error))
     {
         return false;
     }
@@ -484,6 +508,7 @@ bool top_sample(top_t& top, snapshot_t& snapshot, std::string& error)
     top.sampled_at             = process_history.sampled_at;
     top.thread_previous        = std::move(thread_history.previous);
     top.thread_sampled_at      = thread_history.sampled_at;
+    top.sampled_pid            = detail_pid;
     top.previous_cpu_ticks     = next.cpu.ticks;
     top.previous_per_cpu_ticks = std::move(per_cpu_ticks);
     snapshot                   = std::move(next);

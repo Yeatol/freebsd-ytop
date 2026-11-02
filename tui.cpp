@@ -70,6 +70,46 @@ struct display_row_t
     int         threads = 0;
 };
 
+static std::string switch_number(long double value)
+{
+    auto result = std::format("{:.0f}", value);
+    for (char unit : std::string_view("KMGTPE"))
+    {
+        if (value < 999.5L)
+        {
+            break;
+        }
+        value /= 1000;
+        result = std::format("{:.0f}{}", value, unit);
+    }
+    return result;
+}
+
+static std::string switch_value(uint64_t count, const std::optional<double>& rate)
+{
+    auto value = switch_number(count);
+    if (rate.has_value())
+    {
+        auto rounded = switch_number(*rate);
+        if (rounded != "0")
+        {
+            value += "+" + rounded;
+        }
+    }
+    if (value.size() > 9)
+    {
+        value.resize(6);
+        value += "...";
+    }
+    return value;
+}
+
+static std::array<std::string, 2> switch_values(const process_t& p)
+{
+    return {switch_value(p.nivcsw, p.nivcsw_per_second),
+            switch_value(p.nvcsw, p.nvcsw_per_second)};
+}
+
 static std::string process_line(const process_t& p, bool thread, const process_t& command_source, bool show_context_switches = false, size_t affinity_width = 3)
 {
     std::string cpu = p.cpu < 0 ? "-" : std::to_string(p.cpu);
@@ -96,8 +136,17 @@ static std::string process_line(const process_t& p, bool thread, const process_t
     else
     {
         row += std::format("{:<6} ", p.state.substr(0, 6));
+        const auto values = switch_values(command_source);
+        for (size_t i = 0; i < values.size(); ++i)
+        {
+            row += std::format("{:<9} ", values[i]);
+        }
     }
-    row += std::format("{:>6} {:>8.2f}% ", runtime(p.runtime_us), p.cpu_percent);
+    row += std::format("{:>6} ", runtime(p.runtime_us));
+    if ((!thread && !show_context_switches) || p.kernel_process)
+    {
+        row += std::format("{:>8.2f}% ", p.cpu_percent);
+    }
     if (thread || show_context_switches)
     {
         if (!p.kernel_process)
@@ -125,29 +174,16 @@ static std::string process_line(const process_t& p, bool thread, const process_t
         row += std::format("[jail:{}] ", p.jid);
     }
     row += command_source.command;
-    if (thread || show_context_switches)
-    {
-        auto rate = [](const std::optional<double>& value) {
-            if (!value.has_value())
-            {
-                return std::string(" + -");
-            }
-            auto rounded = std::format("{:.0f}", *value);
-            return rounded == "0" ? std::string{} : " + " + rounded;
-        };
-        row += std::format(" (nivcsw={}{}, nvcsw={}{})",
-                           command_source.nivcsw, rate(command_source.nivcsw_per_second),
-                           command_source.nvcsw, rate(command_source.nvcsw_per_second));
-    }
     return row;
 }
 
 static std::vector<display_row_t> lines(const snapshot_t& snapshot, int detail_pid)
 {
     std::vector<display_row_t> result;
-    result.reserve(1 + snapshot.processes.size());
-    bool   kernel_process = false;
-    size_t affinity_width = 3;
+    result.reserve(1 + snapshot.processes.size() + (detail_pid == -1 ? 0 : snapshot.threads.size()));
+    bool                                  kernel_process = false;
+    size_t                                affinity_width = 3;
+    const std::array<std::string_view, 2> switch_headers = {"NIVCSW", "NVCSW"};
     if (detail_pid != -1)
     {
         for (const auto& process : snapshot.processes)
@@ -189,8 +225,16 @@ static std::vector<display_row_t> lines(const snapshot_t& snapshot, int detail_p
     else
     {
         header += std::format("{:<6} ", "STATE");
+        for (size_t i = 0; i < switch_headers.size(); ++i)
+        {
+            header += std::format("{:<9} ", switch_headers[i]);
+        }
     }
-    header += std::format("{:>6} {:>9} ", "TIME", "CPU");
+    header += std::format("{:>6} ", "TIME");
+    if (detail_pid == -1 || kernel_process)
+    {
+        header += std::format("{:>9} ", "CPU");
+    }
     if (detail_pid != -1)
     {
         if (!kernel_process)
@@ -328,12 +372,19 @@ int tui(top_t& top)
             bool       redraw               = true;
             auto       next_sample          = std::chrono::steady_clock::now();
 
-            std::vector<display_row_t>  output;
             std::vector<display_row_t>  display_output;
             std::vector<terminal_row_t> frame;
             terminal_row_t              bar;
-            auto                        update_display_output = [&] {
-                display_output = output;
+            auto                        refresh = [&] {
+                if (!top_sample(top, snapshot, error, filtered_pid))
+                {
+                    status = 1;
+                    return false;
+                }
+                display_output = lines(snapshot, filtered_pid);
+                next_sample    = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+                redraw         = true;
+                return true;
             };
             auto enter_detail = [&] {
                 if (filtered_pid != -1 || selected_pid == -1)
@@ -348,20 +399,22 @@ int tui(top_t& top)
                 pressed_pid          = -1;
                 pressed_tid          = -1;
                 toggle_on_release    = false;
-                output               = lines(snapshot, filtered_pid);
-                update_display_output();
-                redraw = true;
+                refresh();
             };
             auto exit_detail = [&](int visible_rows) {
-                selected_pid      = top.previous.contains(filtered_pid) ? filtered_pid : -1;
+                int target_pid    = filtered_pid;
+                selected_pid      = -1;
                 selected_tid      = -1;
                 filtered_pid      = -1;
                 scroll_offset     = scroll_before_filter;
                 pressed_pid       = -1;
                 pressed_tid       = -1;
                 toggle_on_release = false;
-                output            = lines(snapshot, filtered_pid);
-                update_display_output();
+                if (!refresh())
+                {
+                    return;
+                }
+                selected_pid = top.previous.contains(target_pid) ? target_pid : -1;
                 if (selected_pid != -1)
                 {
                     move_selection(display_output, 0, visible_rows, selected_pid, selected_tid, scroll_offset);
@@ -373,13 +426,12 @@ int tui(top_t& top)
             {
                 if (std::chrono::steady_clock::now() >= next_sample)
                 {
-                    if (!top_sample(top, snapshot, error))
+                    if (!refresh())
                     {
                         status = 1;
                         break;
                     }
-                    output = lines(snapshot, filtered_pid);
-                    if (selected_pid != -1 && !std::ranges::any_of(output, [&](const display_row_t& row) {
+                    if (selected_pid != -1 && !std::ranges::any_of(display_output, [&](const display_row_t& row) {
                             return row.pid == selected_pid && (row.thread ? row.tid == selected_tid : selected_tid == -1);
                         }))
                     {
@@ -389,9 +441,6 @@ int tui(top_t& top)
                         pressed_tid       = -1;
                         toggle_on_release = false;
                     }
-                    update_display_output();
-                    next_sample = std::chrono::steady_clock::now() + std::chrono::seconds(1);
-                    redraw      = true;
                 }
                 bool resized = false;
                 if (!terminal_size(terminal, resized, error))
@@ -472,8 +521,7 @@ int tui(top_t& top)
                             toggle_on_release        = was_selected && filtered_pid == -1;
                             selected_pid             = pressed_row.pid;
                             selected_tid             = pressed_row.thread ? pressed_row.tid : -1;
-                            update_display_output();
-                            redraw = true;
+                            redraw                   = true;
                         }
                     }
                     if (input.kind == terminal_event_kind_t::mouse_release)
@@ -517,7 +565,6 @@ int tui(top_t& top)
                 {
                     int direction = input.kind == terminal_event_kind_t::up || input.kind == terminal_event_kind_t::wheel_up ? -1 : 1;
                     move_selection(display_output, direction, visible_rows, selected_pid, selected_tid, scroll_offset);
-                    update_display_output();
                     redraw = true;
                 }
                 else if (input.kind == terminal_event_kind_t::character && input.character == ' ')

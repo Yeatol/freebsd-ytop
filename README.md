@@ -127,15 +127,17 @@ Normal process-list columns follow FreeBSD `top`:
 11. Unweighted CPU percentage (`CPU`)
 12. Command name (`COMMAND`)
 
-Detail mode replaces `PID` with `TID`, adds user-mode CPU percentage (`UCPU`)
-and kernel-mode CPU percentage (`SCPU`) after `CPU`, and omits `USERNAME`,
+Detail mode replaces `PID` with `TID`, replaces `CPU` with user-mode CPU
+percentage (`UCPU`) and kernel-mode CPU percentage (`SCPU`) for user processes,
+and omits `USERNAME`,
 `THR`, `SIZE`, and `RES`.
 For kernel processes, detail mode shows only `CPU`, omitting `UCPU` and
 `SCPU` from both the header and data rows. Kernel-process detail mode also
 omits affinity information.
-`STATE` immediately follows `NICE`, and `TIME` immediately precedes `CPU`.
-CPU percentage columns are followed by the user-thread affinity column `A`,
-then `C`, before the name column labeled `THREAD` instead of `COMMAND`.
+`STATE` immediately follows `NICE`, followed by `NIVCSW` and `NVCSW`.
+`TIME` immediately precedes `UCPU` for user processes or `CPU` for kernel processes.
+CPU percentage columns are followed by
+the user-thread affinity column `A`, `C`, and `THREAD`.
 
 There is no separate JID column. In the normal process list, commands with
 `ki_jid > 0` are prefixed with `[jail:ID] `; host processes (`ki_jid == 0`) have
@@ -164,12 +166,17 @@ when the thread name is empty.
 In detail mode, the parent `THREAD` also uses the thread name matching its
 displayed TID; other parent columns retain process-wide values. The parent and
 each displayed thread show cumulative involuntary and voluntary context-switch
-counts and rates appended to `THREAD` as
-`(nivcsw=N + X, nvcsw=N + Y)`, where the value after `+` is the per-second
-rate, not a sum to evaluate. Counts are cumulative; rates use counter
+counts in `NIVCSW` and `NVCSW`, each followed by `+rate` for its per-second rate.
+Both columns are left aligned with a fixed width of 9 characters, plus one
+separating space. Both cumulative counts and rates use decimal
+K/M/G/T/P/E suffixes for large values (for example, `123K` or `234M`), without
+decimal places. Each compact value uses at most four characters for normal
+counter ranges, so `123M+223K` fits exactly. Exceptionally long content
+ends with `...`.
+Counts are cumulative; rates use counter
 differences divided by the actual elapsed sample time, rounded to integers.
-The ` + rate` suffix is omitted when the rounded rate is zero.
-Rates show `-` after `+` on the first sample, for a newly observed record, or when
+The rate suffix is hidden when the rounded rate is zero or unavailable
+on the first sample, for a newly observed record, or when
 the corresponding counter decreases or no positive sample interval is available.
 The counters come from
 `ki_rusage.ru_nivcsw` and `ki_rusage.ru_nvcsw`, respectively. For a
@@ -186,9 +193,9 @@ to fit all displayed masks, with a minimum width of three and right alignment
 for both the header and values. For example:
 
 ```text
-    A   C THREAD
-    0   0 thread (nivcsw=12, nvcsw=345 + 10)
-0,2,3   2 thread (nivcsw=67 + 2, nvcsw=8901 + 50)
+NIVCSW    NVCSW         A   C THREAD
+12        345+10        0   0 thread
+67+2      8901+50   0,2,3   2 thread
 ```
 
 Masks equal to the monitor's root CPU set show `-` in `A`. Inherited process or jail
@@ -206,6 +213,13 @@ Swap usage is not displayed.
 Process and thread CPU histories are tracked separately. System processes and
 kernel idle threads are included; zombies are hidden. Processes are sorted by
 PID in ascending order.
+
+Sampling follows the active view. The process list queries only process records,
+without thread or affinity queries. Detail mode queries only the target PID's
+process record and threads; hidden kernel-thread affinity and thread usernames
+are not collected. Switching views samples immediately and resets record-rate
+baselines, so context-switch rate suffixes are hidden until rates become available.
+Selection changes reuse the existing formatted rows without copying the list.
 
 The first snapshot uses the kernel CPU estimate; later snapshots use runtime
 differences without process-age weighting. A multi-threaded process can exceed
@@ -234,7 +248,8 @@ from `CPU`.
 
 ### System CPU sampling
 
-`top_sample` collects whole-system and per-CPU data. The right-side bar uses
+`top_sample` accepts an optional detail PID (`-1` for the process list) and
+collects whole-system and per-CPU data. The right-side bar uses
 the whole-system summary; individual CPU data is not displayed.
 Like FreeBSD `top`, it sizes the per-CPU buffer using
 `kern.smp.maxcpus`, reads `kern.cp_times`, and omits CPU slots whose counters

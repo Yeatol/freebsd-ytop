@@ -57,6 +57,9 @@ static void test_layout()
           "process name and counters in normal mode");
     check(normal[1].text.find("[jail:69] process") != std::string::npos, "process list retains jail prefix");
     auto detail = lines(snapshot, 10);
+    check(detail[0].text.find(" CPU ") == std::string::npos &&
+          detail[0].text.find("UCPU") != std::string::npos && detail[0].text.find("SCPU") != std::string::npos,
+          "user detail shows split CPU columns without total CPU");
     check(detail.size() == 3 && detail[1].tid == 100 && detail[2].tid == 101, "representative TID is not duplicated");
     check(!detail[1].thread && detail[2].thread, "parent and thread selection identities");
     size_t affinity = detail[0].text.find("  A ");
@@ -70,14 +73,31 @@ static void test_layout()
         check(detail[i].text.substr(affinity, 4) == "  - ", "unrestricted affinity is right aligned");
         check(detail[i].text.substr(cpu, 4) == "  0 ", "CPU is right aligned");
     }
-    check(detail[1].text.substr(name).starts_with("representative (nivcsw="), "parent uses representative name");
-    check(detail[2].text.substr(name).starts_with("worker (nivcsw="), "thread name and counters aligned");
-    check(detail[1].text.ends_with("(nivcsw=0 + -, nvcsw=0 + -)"), "unavailable rates are not fabricated");
-    check(detail[2].text.ends_with("(nivcsw=12 + 3, nvcsw=345 + 50)"), "switch rates round to integers with spaced plus signs");
+    check(detail[1].text.substr(name) == "representative", "parent uses representative name");
+    check(detail[2].text.substr(name) == "worker", "thread name has no appended counters");
+    size_t switches = detail[0].text.find("NIVCSW ");
+    check(switches == detail[0].text.find("STATE") + 7, "switch columns immediately follow STATE");
+    check(switches < affinity && detail[0].text.substr(switches, 20) == "NIVCSW    NVCSW     ", "two fixed-width switch columns precede A");
+    check(detail[1].text.substr(switches, 20) == "0         0         ", "unavailable rates show only counts");
+    check(detail[2].text.substr(switches, 20) == "12+3      345+50    ", "combined counts and rates are left aligned");
     snapshot.threads[1].nivcsw_per_second = 0.0;
     snapshot.threads[1].nvcsw_per_second = 0.4;
     detail = lines(snapshot, 10);
-    check(detail[2].text.ends_with("(nivcsw=12, nvcsw=345)"), "zero and rounded-zero rates omit plus suffix");
+    check(detail[2].text.substr(switches, 20) == "12        345       ", "zero and rounded-zero suffixes are hidden");
+    snapshot.threads[1].nvcsw = UINT64_MAX;
+    snapshot.threads[1].nivcsw_per_second = 12345678.0;
+    detail = lines(snapshot, 10);
+    check(detail[2].text.substr(switches, 20) == "12+12M    18E       ", "counts and rates use compact units");
+    check(detail[0].text == lines(snapshot_t{.processes = {record(10, 100)}, .threads = {record(10, 100)}}, 10)[0].text,
+          "large counts and rates do not change column widths");
+    check(switch_value(12345678, std::nullopt) == "12M", "cumulative values use compact units");
+    check(switch_value(12, 123000.0) == "12+123K" &&
+          switch_value(12, 999500.0) == "12+1M", "rate suffixes promote rounded unit boundaries");
+    check(switch_value(123000000, 223000.0) == "123M+223K" &&
+          switch_value(999499999, 999499.0) == "999M+999K", "combined values fit nine characters");
+    check(switch_value(999500, std::nullopt) == "1M", "cumulative values promote rounded unit boundaries");
+    check(detail[1].text.find("representative") == detail[0].text.find("THREAD") &&
+          detail[2].text.find("worker") == detail[0].text.find("THREAD"), "large counts and rates preserve column alignment");
     snapshot.threads[1].affinity = "0,2,3,7";
     detail = lines(snapshot, 10);
     affinity = detail[0].text.find("      A ");
@@ -85,13 +105,15 @@ static void test_layout()
     check(detail[1].text.substr(affinity, 8) == "      - " &&
           detail[2].text.substr(affinity, 8) == "0,2,3,7 ", "long affinity masks keep all rows aligned");
     auto kernel = lines(snapshot, 20);
+    check(kernel[0].text.find(" CPU ") != std::string::npos, "kernel detail retains total CPU");
+    check(normal[0].text.find(" CPU ") != std::string::npos, "process list retains total CPU");
     check(kernel[0].text.find("UCPU") == std::string::npos && kernel[0].text.find(" A ") == std::string::npos,
           "kernel layout omits user counters and affinity");
-    check(kernel[1].text.find("process (nivcsw=") == kernel[0].text.find("THREAD"), "kernel columns aligned");
+    check(kernel[1].text.find("process") == kernel[0].text.find("THREAD"), "kernel columns aligned");
     check(lines(snapshot, 99).size() == 1, "disappeared process leaves only header");
     snapshot.threads.erase(snapshot.threads.begin());
     detail = lines(snapshot, 10);
-    check(detail.size() == 3 && detail[1].text.find("process (nivcsw=") != std::string::npos,
+    check(detail.size() == 3 && detail[1].text.ends_with("process"),
           "missing representative falls back to process name");
     check(memory(9999) == "9999K" && memory(10240) == "10M", "memory unit boundary");
     check(runtime(59500000) == "1:00" && runtime(6000000000) == "1h", "runtime rounding and hour format");
@@ -189,7 +211,10 @@ static void test_live_sampling()
     snapshot_t snapshot;
     for (int sample = 0; sample < 20; ++sample)
     {
-        check(top_sample(top, snapshot, error), error);
+        check(top_sample(top, snapshot, error, getpid()), error);
+        check(snapshot.processes.size() == 1 && snapshot.processes[0].pid == getpid(), "detail samples only target process");
+        check(std::ranges::all_of(snapshot.threads, [](const process_t& p) { return p.pid == getpid(); }),
+              "detail samples only target threads");
         check(std::ranges::is_sorted(snapshot.processes, compare_processes), "live processes sorted by PID");
         check(std::ranges::is_sorted(snapshot.threads, compare_threads), "live threads sorted by PID/TID");
         auto own = std::ranges::find(snapshot.threads, tid, &process_t::tid);
@@ -220,11 +245,19 @@ static void test_live_sampling()
     auto process_count = snapshot.processes.size();
     int max_cpus = top.max_cpus;
     top.max_cpus = 0;
-    check(!top_sample(top, snapshot, error) && !error.empty(), "malformed CPU buffer fails explicitly");
+    check(!top_sample(top, snapshot, error, getpid()) && !error.empty(), "malformed CPU buffer fails explicitly");
     check(top.sampled_at == previous_time && snapshot.processes.size() == process_count, "failed sample preserves committed state");
     top.max_cpus = max_cpus;
     error.clear();
+    check(top_sample(top, snapshot, error, getpid()), error);
     check(top_sample(top, snapshot, error), error);
+    check(snapshot.threads.empty() && top.thread_previous.empty(), "process view skips thread sampling and history");
+    check(snapshot.processes.size() > 1, "process view samples all visible processes");
+    check(top_sample(top, snapshot, error, getpid()), error);
+    auto own = std::ranges::find(snapshot.threads, tid, &process_t::tid);
+    check(own != snapshot.threads.end() && !own->nvcsw_per_second.has_value(), "switching views resets thread rate baseline");
+    check(top_sample(top, snapshot, error, 999999), error);
+    check(snapshot.processes.empty() && snapshot.threads.empty(), "missing detail target produces empty snapshot");
     top_close(top);
     check(top.kernel == nullptr && top.previous.empty() && top.thread_previous.empty(), "sampler cleanup releases state");
     top_close(top);

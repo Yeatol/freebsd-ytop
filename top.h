@@ -101,7 +101,8 @@ struct top_t
     std::unordered_map<int, previous_process_t> previous;
     std::chrono::steady_clock::time_point       thread_sampled_at{};
     std::unordered_map<int, previous_process_t> thread_previous;
-    int                                         max_cpus = 0;
+    int                                         max_cpus    = 0;
+    int                                         sampled_pid = -1;
     std::array<long, CPUSTATES>                 previous_cpu_ticks{};
     std::vector<std::array<long, CPUSTATES>>    previous_per_cpu_ticks;
 };
@@ -110,4 +111,4 @@ bool top_open(top_t& top, std::string& error);
 
 void top_close(top_t& top);
 
-bool top_sample(top_t& top, snapshot_t& snapshot, std::string& error);
+bool top_sample(top_t& top, snapshot_t& snapshot, std::string& error, int detail_pid = -1);
