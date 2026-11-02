@@ -397,23 +397,61 @@ static int cpu_columns(int count, int width, int height = 0)
     return columns;
 }
 
-static int cpu_prefix_rows(int count, int width, int height)
+struct cpu_layout_t
 {
-    int columns = cpu_columns(count, width, height);
-    int rows    = std::min((count + columns - 1) / columns, std::max(0, height / 2 - 2));
-    return rows > 0 ? rows + 2 : 0;
+    int width;
+    int columns;
+    int column_width;
+    int bar_cells;
+    int rows        = 0;
+    int first_row   = 0;
+    int table_start = 0;
+};
+
+static cpu_layout_t cpu_grid_layout(int width, int columns)
+{
+    int column_width = width / columns;
+    return {width, columns, column_width, std::max(0, column_width - 5)};
 }
 
-static terminal_row_t cpu_grid_line(const std::vector<cpu_t>& cpus, int row, int columns, int width)
+static cpu_layout_t cpu_layout(int count, int width, int height)
+{
+    int  columns       = cpu_columns(count, width, height);
+    auto layout        = cpu_grid_layout(width, columns);
+    layout.rows        = std::min((count + columns - 1) / columns, std::max(0, height / 2 - 2));
+    layout.first_row   = layout.rows > 0 ? 1 : 0;
+    layout.table_start = layout.rows > 0 ? layout.rows + 2 : 0;
+    return layout;
+}
+
+struct view_layout_t
+{
+    int          width;
+    int          height;
+    cpu_layout_t cpu;
+    int          visible_rows;
+};
+
+static view_layout_t view_layout(int width, int height, int cpu_count, bool detail)
+{
+    auto cpu = cpu_layout(detail ? cpu_count : 0, std::max(0, width - 1), height);
+    return {width, height, cpu, std::max(0, height - cpu.table_start - 1)};
+}
+
+static int table_hit(const view_layout_t& layout, int visible_lines, int x, int y)
+{
+    int row = y - layout.cpu.table_start;
+    return x >= 0 && x < layout.width && y < layout.height && row > 0 && row < visible_lines ? row : -1;
+}
+
+static terminal_row_t cpu_grid_line(const std::vector<cpu_t>& cpus, int row, const cpu_layout_t& layout)
 {
     terminal_row_t result;
-    result.text.reserve(static_cast<size_t>(width));
-    result.colors.reserve(static_cast<size_t>(columns) * 5);
-    size_t base_rows    = cpus.size() / static_cast<size_t>(columns);
-    size_t extra_rows   = cpus.size() % static_cast<size_t>(columns);
-    int    column_width = width / columns;
-    int    cells        = std::max(0, column_width - 5);
-    for (int column = 0; column < columns; ++column)
+    result.text.reserve(static_cast<size_t>(layout.width));
+    result.colors.reserve(static_cast<size_t>(layout.columns) * 5);
+    size_t base_rows  = cpus.size() / static_cast<size_t>(layout.columns);
+    size_t extra_rows = cpus.size() % static_cast<size_t>(layout.columns);
+    for (int column = 0; column < layout.columns; ++column)
     {
         size_t column_index = static_cast<size_t>(column);
         size_t column_rows  = base_rows + (column_index < extra_rows ? 1 : 0);
@@ -422,8 +460,8 @@ static terminal_row_t cpu_grid_line(const std::vector<cpu_t>& cpus, int row, int
             break;
         }
         size_t index = column_index * base_rows + std::min(column_index, extra_rows) + static_cast<size_t>(row);
-        int    start = column * column_width;
-        auto   bar   = cpu_line(cpus[index], cells);
+        int    start = column * layout.column_width;
+        auto   bar   = cpu_line(cpus[index], layout.bar_cells);
         result.text.resize(static_cast<size_t>(start), ' ');
         for (auto span : bar.colors)
         {
@@ -433,6 +471,59 @@ static terminal_row_t cpu_grid_line(const std::vector<cpu_t>& cpus, int row, int
         result.text += bar.text;
     }
     return result;
+}
+
+struct view_state_t
+{
+    int     selected_pid         = -1;
+    lwpid_t selected_tid         = -1;
+    int     scroll_offset        = 0;
+    int     scroll_before_filter = 0;
+    int     filtered_pid         = -1;
+    int     pressed_pid          = -1;
+    lwpid_t pressed_tid          = -1;
+    bool    toggle_on_release    = false;
+};
+
+static void clear_press(view_state_t& state)
+{
+    state.pressed_pid       = -1;
+    state.pressed_tid       = -1;
+    state.toggle_on_release = false;
+}
+
+static void clear_selection(view_state_t& state)
+{
+    state.selected_pid = -1;
+    state.selected_tid = -1;
+    clear_press(state);
+}
+
+static bool row_selected(const display_row_t& row, const view_state_t& state)
+{
+    return row.pid == state.selected_pid && (row.thread ? row.tid == state.selected_tid : state.selected_tid == -1);
+}
+
+static bool enter_detail_view(view_state_t& state)
+{
+    if (state.filtered_pid != -1 || state.selected_pid == -1)
+    {
+        return false;
+    }
+    state.scroll_before_filter = state.scroll_offset;
+    state.scroll_offset        = 0;
+    state.filtered_pid         = state.selected_pid;
+    clear_selection(state);
+    return true;
+}
+
+static int exit_detail_view(view_state_t& state)
+{
+    int target_pid      = state.filtered_pid;
+    state.filtered_pid  = -1;
+    state.scroll_offset = state.scroll_before_filter;
+    clear_selection(state);
+    return target_pid;
 }
 
 int tui(top_t& top)
@@ -447,66 +538,45 @@ int tui(top_t& top)
         }
         else
         {
-            snapshot_t snapshot;
-            int        selected_pid         = -1;
-            lwpid_t    selected_tid         = -1;
-            int        scroll_offset        = 0;
-            int        scroll_before_filter = 0;
-            int        filtered_pid         = -1;
-            int        pressed_pid          = -1;
-            lwpid_t    pressed_tid          = -1;
-            bool       toggle_on_release    = false;
-            bool       redraw               = true;
-            bool       cpu_rows_dirty       = true;
-            auto       next_sample          = std::chrono::steady_clock::now();
+            snapshot_t   snapshot;
+            view_state_t state;
+            bool         redraw         = true;
+            bool         cpu_rows_dirty = true;
+            auto         next_sample    = std::chrono::steady_clock::now();
 
             std::vector<display_row_t>  display_output;
             std::vector<terminal_row_t> frame;
             std::vector<terminal_row_t> cpu_frame;
             auto                        refresh = [&] {
-                if (!top_sample(top, snapshot, error, filtered_pid))
+                if (!top_sample(top, snapshot, error, state.filtered_pid))
                 {
                     status = 1;
                     return false;
                 }
-                display_output = lines(snapshot, filtered_pid, false);
+                display_output = lines(snapshot, state.filtered_pid, false);
                 cpu_rows_dirty = true;
                 next_sample    = std::chrono::steady_clock::now() + std::chrono::seconds(1);
                 redraw         = true;
                 return true;
             };
             auto enter_detail = [&] {
-                if (filtered_pid != -1 || selected_pid == -1)
+                if (!enter_detail_view(state))
                 {
                     return;
                 }
-                scroll_before_filter = scroll_offset;
-                scroll_offset        = 0;
-                filtered_pid         = selected_pid;
-                selected_pid         = -1;
-                selected_tid         = -1;
-                pressed_pid          = -1;
-                pressed_tid          = -1;
-                toggle_on_release    = false;
                 refresh();
             };
             auto exit_detail = [&] {
-                int target_pid    = filtered_pid;
-                selected_pid      = -1;
-                selected_tid      = -1;
-                filtered_pid      = -1;
-                scroll_offset     = scroll_before_filter;
-                pressed_pid       = -1;
-                pressed_tid       = -1;
-                toggle_on_release = false;
+                int target_pid = exit_detail_view(state);
                 if (!refresh())
                 {
                     return;
                 }
-                selected_pid = top.previous.contains(target_pid) ? target_pid : -1;
-                if (selected_pid != -1)
+                state.selected_pid = top.previous.contains(target_pid) ? target_pid : -1;
+                if (state.selected_pid != -1)
                 {
-                    move_selection(display_output, 0, std::max(0, terminal.height - 1), selected_pid, selected_tid, scroll_offset);
+                    auto layout = view_layout(terminal.width, terminal.height, 0, false);
+                    move_selection(display_output, 0, layout.visible_rows, state.selected_pid, state.selected_tid, state.scroll_offset);
                 }
                 redraw = true;
             };
@@ -520,15 +590,11 @@ int tui(top_t& top)
                         status = 1;
                         break;
                     }
-                    if (selected_pid != -1 && !std::ranges::any_of(display_output, [&](const display_row_t& row) {
-                            return row.pid == selected_pid && (row.thread ? row.tid == selected_tid : selected_tid == -1);
+                    if (state.selected_pid != -1 && !std::ranges::any_of(display_output, [&](const display_row_t& row) {
+                            return row_selected(row, state);
                         }))
                     {
-                        selected_pid      = -1;
-                        selected_tid      = -1;
-                        pressed_pid       = -1;
-                        pressed_tid       = -1;
-                        toggle_on_release = false;
+                        clear_selection(state);
                     }
                 }
                 bool resized = false;
@@ -538,58 +604,49 @@ int tui(top_t& top)
                     break;
                 }
                 redraw                 = redraw || resized;
-                int height             = terminal.height;
-                int width              = terminal.width;
-                int total_rows         = static_cast<int>(display_output.size()) - 1;
-                int table_width        = width;
-                int cpu_width          = std::max(0, width - 1);
-                int cpu_count          = static_cast<int>(snapshot.cpus.size());
-                int columns            = cpu_columns(cpu_count, cpu_width, height);
-                int table_start        = filtered_pid == -1 ? 0 : cpu_prefix_rows(cpu_count, cpu_width, height);
-                int cpu_rows           = std::max(0, table_start - 2);
-                int cpu_start          = cpu_rows > 0 ? 1 : 0;
-                int visible_rows       = std::max(0, height - table_start - 1);
-                int max_offset         = std::max(0, total_rows - visible_rows);
-                scroll_offset          = std::clamp(scroll_offset, 0, max_offset);
-                int visible_line_count = std::min(visible_rows, total_rows - scroll_offset) + 1;
+                auto layout            = view_layout(terminal.width, terminal.height, static_cast<int>(snapshot.cpus.size()), state.filtered_pid != -1);
+                int  total_rows        = static_cast<int>(display_output.size()) - 1;
+                int  max_offset        = std::max(0, total_rows - layout.visible_rows);
+                state.scroll_offset    = std::clamp(state.scroll_offset, 0, max_offset);
+                int visible_line_count = std::min(layout.visible_rows, total_rows - state.scroll_offset) + 1;
                 if (redraw)
                 {
                     if (cpu_rows_dirty || resized)
                     {
-                        cpu_frame.resize(static_cast<size_t>(cpu_rows));
-                        for (int row = 0; row < cpu_rows; ++row)
+                        cpu_frame.resize(static_cast<size_t>(layout.cpu.rows));
+                        for (int row = 0; row < layout.cpu.rows; ++row)
                         {
-                            cpu_frame[row] = cpu_grid_line(snapshot.cpus, row, columns, cpu_width);
+                            cpu_frame[row] = cpu_grid_line(snapshot.cpus, row, layout.cpu);
                         }
                         cpu_rows_dirty = false;
                     }
-                    frame.resize(static_cast<size_t>(height));
-                    for (int row = 0; row < height; ++row)
+                    frame.resize(static_cast<size_t>(layout.height));
+                    for (int row = 0; row < layout.height; ++row)
                     {
                         frame[row].reverse    = false;
                         frame[row].foreground = terminal_color_t::normal;
                         frame[row].colors.clear();
-                        if (row >= cpu_start && row < cpu_start + cpu_rows)
+                        if (row >= layout.cpu.first_row && row < layout.cpu.first_row + layout.cpu.rows)
                         {
-                            frame[row] = cpu_frame[row - cpu_start];
+                            frame[row] = cpu_frame[row - layout.cpu.first_row];
                             continue;
                         }
-                        int table_row = row - table_start;
+                        int table_row = row - layout.cpu.table_start;
                         if (table_row < 0 || table_row >= visible_line_count)
                         {
                             frame[row].text.clear();
                             continue;
                         }
-                        int   output_row_index = table_row == 0 ? 0 : table_row + scroll_offset;
-                        bool  row_is_selected  = table_row > 0 && display_output[output_row_index].pid == selected_pid && (display_output[output_row_index].thread ? display_output[output_row_index].tid == selected_tid : selected_tid == -1);
+                        int   output_row_index = table_row == 0 ? 0 : table_row + state.scroll_offset;
+                        bool  row_is_selected  = table_row > 0 && row_selected(display_output[output_row_index], state);
                         auto& displayed        = display_output[output_row_index];
                         if (table_row != 0 && displayed.text.empty())
                         {
                             displayed.text = process_line(*displayed.record, displayed.thread, *displayed.command_source,
-                                                          filtered_pid != -1, displayed.affinity_width);
+                                                          state.filtered_pid != -1, displayed.affinity_width);
                         }
                         frame[row].text       = displayed.text;
-                        auto selection_color  = filtered_pid == -1 ? terminal_color_t::blue : terminal_color_t::green;
+                        auto selection_color  = state.filtered_pid == -1 ? terminal_color_t::blue : terminal_color_t::green;
                         frame[row].foreground = row_is_selected ? selection_color : terminal_color_t::normal;
                     }
                     if (!terminal_render(terminal, frame, error))
@@ -614,54 +671,45 @@ int tui(top_t& top)
                 }
                 if (input.kind == terminal_event_kind_t::mouse_press || input.kind == terminal_event_kind_t::mouse_release)
                 {
-                    int table_y = input.y - table_start;
+                    int table_y = table_hit(layout, visible_line_count, input.x, input.y);
                     if (input.kind == terminal_event_kind_t::mouse_press)
                     {
-                        pressed_pid       = -1;
-                        pressed_tid       = -1;
-                        toggle_on_release = false;
-                        if (table_y > 0 && table_y < visible_line_count && input.x >= 0 && input.x < table_width)
+                        clear_press(state);
+                        if (table_y != -1)
                         {
-                            const auto& pressed_row  = display_output[table_y + scroll_offset];
-                            bool        was_selected = selected_pid == pressed_row.pid && (pressed_row.thread ? selected_tid == pressed_row.tid : selected_tid == -1);
-                            pressed_pid              = pressed_row.pid;
-                            pressed_tid              = pressed_row.tid;
-                            toggle_on_release        = was_selected && filtered_pid == -1;
-                            selected_pid             = pressed_row.pid;
-                            selected_tid             = pressed_row.thread ? pressed_row.tid : -1;
+                            const auto& pressed_row  = display_output[table_y + state.scroll_offset];
+                            bool        was_selected = row_selected(pressed_row, state);
+                            state.pressed_pid        = pressed_row.pid;
+                            state.pressed_tid        = pressed_row.tid;
+                            state.toggle_on_release  = was_selected && state.filtered_pid == -1;
+                            state.selected_pid       = pressed_row.pid;
+                            state.selected_tid       = pressed_row.thread ? pressed_row.tid : -1;
                             redraw                   = true;
                         }
                     }
                     if (input.kind == terminal_event_kind_t::mouse_release)
                     {
-                        if (toggle_on_release && table_y > 0 && table_y < visible_line_count && input.x >= 0 && input.x < table_width)
+                        if (state.toggle_on_release && table_y != -1)
                         {
-                            const auto& released_row = display_output[table_y + scroll_offset];
-                            if (released_row.pid == pressed_pid && released_row.tid == pressed_tid && selected_pid == released_row.pid &&
-                                selected_tid == (released_row.thread ? released_row.tid : -1))
+                            const auto& released_row = display_output[table_y + state.scroll_offset];
+                            if (released_row.pid == state.pressed_pid && released_row.tid == state.pressed_tid && row_selected(released_row, state))
                             {
                                 enter_detail();
                             }
                         }
-                        pressed_pid       = -1;
-                        pressed_tid       = -1;
-                        toggle_on_release = false;
+                        clear_press(state);
                     }
                 }
                 else if (input.kind == terminal_event_kind_t::escape || input.kind == terminal_event_kind_t::mouse_right_press)
                 {
-                    if (selected_pid == -1 && filtered_pid != -1)
+                    if (state.selected_pid == -1 && state.filtered_pid != -1)
                     {
                         exit_detail();
                     }
                     else
                     {
-                        selected_pid      = -1;
-                        selected_tid      = -1;
-                        pressed_pid       = -1;
-                        pressed_tid       = -1;
-                        toggle_on_release = false;
-                        redraw            = true;
+                        clear_selection(state);
+                        redraw = true;
                     }
                 }
                 else if (input.kind == terminal_event_kind_t::redraw)
@@ -672,12 +720,12 @@ int tui(top_t& top)
                          input.kind == terminal_event_kind_t::wheel_up || input.kind == terminal_event_kind_t::wheel_down)
                 {
                     int direction = input.kind == terminal_event_kind_t::up || input.kind == terminal_event_kind_t::wheel_up ? -1 : 1;
-                    move_selection(display_output, direction, visible_rows, selected_pid, selected_tid, scroll_offset);
+                    move_selection(display_output, direction, layout.visible_rows, state.selected_pid, state.selected_tid, state.scroll_offset);
                     redraw = true;
                 }
                 else if (input.kind == terminal_event_kind_t::character && input.character == ' ')
                 {
-                    if (filtered_pid != -1)
+                    if (state.filtered_pid != -1)
                     {
                         exit_detail();
                     }

@@ -306,6 +306,10 @@ errors, malformed counter sizes, and samples with no active CPUs are reported.
 The code uses data-only structs and free functions, without custom classes or
 namespaces. Custom types use lowercase snake_case names ending in `_t`.
 File-local helpers use `static` linkage.
+The TUI computes one layout result for CPU grid geometry, table offsets, visible
+row counts and mouse hit testing. View state stores selection, scrolling,
+detail filtering and mouse press tracking together; shared transition helpers
+reset selection and press state without altering sampling or display rules.
 
 Initialize a `top_t` with `top_t top{}`, call `top_open` and `top_sample`, then
 call `top_close` on both success and failure paths to release the kernel handle

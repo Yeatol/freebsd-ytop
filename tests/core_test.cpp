@@ -131,6 +131,38 @@ static void test_layout()
 
 static void test_selection()
 {
+    view_state_t state;
+    check(!enter_detail_view(state), "entering detail without selection changes nothing");
+    state.selected_pid = 10;
+    state.scroll_offset = 7;
+    state.pressed_pid = 10;
+    state.pressed_tid = 100;
+    state.toggle_on_release = true;
+    check(enter_detail_view(state) && state.filtered_pid == 10 &&
+          state.scroll_before_filter == 7 && state.scroll_offset == 0 &&
+          state.selected_pid == -1 && state.selected_tid == -1 &&
+          state.pressed_pid == -1 && state.pressed_tid == -1 && !state.toggle_on_release,
+          "entering detail preserves process scroll and resets selection and mouse state");
+    state.selected_pid = 10;
+    state.selected_tid = 101;
+    state.scroll_offset = 3;
+    check(!enter_detail_view(state) && state.scroll_offset == 3 && state.selected_tid == 101,
+          "entering detail again is a no-op");
+    auto identity = record(10, 101);
+    display_row_t thread_row{.pid = identity.pid, .tid = identity.tid, .thread = true};
+    display_row_t process_row{.pid = identity.pid, .tid = identity.tid};
+    check(row_selected(thread_row, state) && !row_selected(process_row, state),
+          "thread and parent selection identities remain distinct");
+    clear_selection(state);
+    check(state.filtered_pid == 10 && state.scroll_offset == 3 && state.selected_pid == -1,
+          "clearing selection does not exit detail or reset scrolling");
+    check(exit_detail_view(state) == 10 && state.filtered_pid == -1 &&
+          state.scroll_offset == 7 && state.selected_pid == -1,
+          "exiting detail returns target PID and restores process scrolling");
+    state.selected_pid = 10;
+    check(row_selected(process_row, state) && !row_selected(thread_row, state),
+          "process selection does not select its threads");
+
     snapshot_t snapshot;
     snapshot.processes = {record(10, 100)};
     for (int i = 0; i < 12; ++i)
@@ -177,34 +209,66 @@ static void cpu_fixture(std::vector<cpu_t>& cpus, int count)
 
 static void test_cpu()
 {
+    auto normal = view_layout(120, 24, 8, false);
+    check(normal.cpu.rows == 0 && normal.cpu.table_start == 0 && normal.visible_rows == 23,
+          "process view uses full table height and no CPU grid");
+    auto detail = view_layout(120, 24, 8, true);
+    check(detail.cpu.width == 119 && detail.cpu.columns == 2 && detail.cpu.rows == 4 &&
+          detail.cpu.column_width == 59 && detail.cpu.bar_cells == 54 &&
+          detail.cpu.first_row == 1 && detail.cpu.table_start == 6 && detail.visible_rows == 17,
+          "thread view shares CPU geometry, blank rows and table offset");
+    for (int y = 0; y <= detail.cpu.table_start; ++y)
+    {
+        check(table_hit(detail, 5, 0, y) == -1, "CPU region, blank lines and table header are not selectable");
+    }
+    check(table_hit(detail, 5, 0, 7) == 1 && table_hit(detail, 5, 119, 10) == 4 &&
+          table_hit(detail, 5, 0, 11) == -1 && table_hit(detail, 5, -1, 7) == -1 &&
+          table_hit(detail, 5, 120, 7) == -1 && table_hit(detail, 100, 0, 24) == -1,
+          "mouse hit testing maps only visible table rows and valid screen coordinates");
+    check(table_hit(normal, 5, 0, 1) == 1 && table_hit(normal, 5, 0, 0) == -1,
+          "process view mouse rows have no CPU offset");
+    for (int count : {0, 1, 8, 10, 12, 127, 128, 256})
+    {
+        for (int height : {1, 4, 5, 6, 8, 16, 24, 80})
+        {
+            for (int width : {1, 2, 15, 80, 120})
+            {
+                auto layout = view_layout(width, height, count, true);
+                check(layout.cpu.table_start <= height / 2 && layout.visible_rows >= 0 &&
+                      layout.cpu.rows + (layout.cpu.rows > 0 ? 2 : 0) == layout.cpu.table_start &&
+                      layout.cpu.column_width * layout.cpu.columns <= layout.cpu.width,
+                      "unified layout preserves half-height, margins and nonnegative dimensions");
+            }
+        }
+    }
     std::vector<cpu_t> simulated;
-    check(cpu_prefix_rows(12, 120, 80) == 6 && cpu_prefix_rows(12, 80, 24) == 8,
+    check(cpu_layout(12, 120, 80).table_start == 6 && cpu_layout(12, 80, 24).table_start == 8,
           "CPU prefix reserves top and bottom blank lines");
-    check(cpu_prefix_rows(12, 120, 5) == 0 && cpu_prefix_rows(12, 120, 4) == 0 &&
-          cpu_prefix_rows(0, 120, 80) == 0, "short terminal preserves table header and data");
-    check(cpu_columns(24, 120, 16) == 4 && cpu_prefix_rows(24, 120, 16) == 8,
+    check(cpu_layout(12, 120, 5).table_start == 0 && cpu_layout(12, 120, 4).table_start == 0 &&
+          cpu_layout(0, 120, 80).table_start == 0, "short terminal preserves table header and data");
+    check(cpu_columns(24, 120, 16) == 4 && cpu_layout(24, 120, 16).table_start == 8,
           "CPU layout adds columns to fit half the screen without gaps");
-    check(cpu_columns(12, 120, 8) == 6 && cpu_prefix_rows(12, 120, 8) == 4,
+    check(cpu_columns(12, 120, 8) == 6 && cpu_layout(12, 120, 8).table_start == 4,
           "short CPU area expands columns before clipping");
-    check(cpu_columns(128, 120, 24) == 16 && cpu_prefix_rows(128, 120, 24) == 10,
+    check(cpu_columns(128, 120, 24) == 16 && cpu_layout(128, 120, 24).table_start == 10,
           "dense CPU layout fits all cores within half the screen");
     cpu_fixture(simulated, 128);
-    auto dense = cpu_grid_line(simulated, 7, 16, 120);
+    auto dense = cpu_grid_line(simulated, 7, cpu_layout(128, 120, 24));
     check(dense.text.size() == 112 && dense.text.substr(105).starts_with("127["),
           "compact grid displays the final CPU without clipping");
     check(cpu_columns(127, 120, 24) == 13,
           "showing all CPUs takes priority over avoiding grid gaps");
     cpu_fixture(simulated, 256);
     int max_columns = cpu_columns(256, 120, 40);
-    auto max_grid = cpu_grid_line(simulated, 15, max_columns, 120);
+    auto max_grid = cpu_grid_line(simulated, 15, cpu_layout(256, 120, 40));
     check(max_columns == 16 && max_grid.text.find("255[") != std::string::npos &&
-          max_grid.text.size() <= 120 && cpu_prefix_rows(256, 120, 40) <= 20,
+          max_grid.text.size() <= 120 && cpu_layout(256, 120, 40).table_start <= 20,
           "256 CPUs retain three-character IDs and equal-width compact bars");
     for (int height = 1; height <= 81; ++height)
     {
         for (int width : {2, 15, 80, 120})
         {
-            check(cpu_prefix_rows(128, width, height) <= height / 2,
+            check(cpu_layout(128, width, height).table_start <= height / 2,
                   "CPU area including blank lines never exceeds half the screen");
         }
     }
@@ -271,7 +335,7 @@ static void test_cpu()
         int rows = (8 + columns - 1) / columns;
         for (int row = 0; row < rows; ++row)
         {
-            auto grid = cpu_grid_line(cpus, row, columns, width);
+            auto grid = cpu_grid_line(cpus, row, cpu_grid_layout(width, columns));
             check(grid.text.size() <= static_cast<size_t>(width), "CPU grid fits screen width");
             size_t previous = 0;
             for (auto span : grid.colors)
@@ -280,7 +344,7 @@ static void test_cpu()
                 previous = span.offset;
             }
         }
-        auto grid = cpu_grid_line(cpus, 0, columns, width);
+        auto grid = cpu_grid_line(cpus, 0, cpu_grid_layout(width, columns));
         size_t bar_width = std::string::npos;
         size_t position = 0;
         for (int column = 0; column < columns; ++column)
@@ -300,28 +364,28 @@ static void test_cpu()
             position = close + 1;
         }
     }
-    auto grid = cpu_grid_line(cpus, 3, cpu_columns(8, 120), 120);
+    auto grid = cpu_grid_line(cpus, 3, cpu_layout(8, 120, 80));
     for (int screen_width : {40, 79, 80, 120, 121})
     {
         int cpu_width = screen_width - 1;
-        auto padded = cpu_grid_line(cpus, 0, cpu_columns(8, cpu_width, 24), cpu_width);
+        auto padded = cpu_grid_line(cpus, 0, cpu_layout(8, cpu_width, 24));
         check(padded.text.size() <= static_cast<size_t>(screen_width - 1),
               "CPU grid reserves at least one blank cell at screen right");
     }
-    check(cpu_prefix_rows(8, 120, 80) == 6 && grid.text.starts_with("  3[") &&
+    check(cpu_layout(8, 120, 80).table_start == 6 && grid.text.starts_with("  3[") &&
           grid.text.substr(60, 4) == "  7[",
           "eight CPUs form four rows and two columns ordered vertically");
     cpu_fixture(cpus, 12);
-    grid = cpu_grid_line(cpus, 0, cpu_columns(12, 120), 120);
+    grid = cpu_grid_line(cpus, 0, cpu_layout(12, 120, 80));
     check(grid.text.starts_with("  0[") && grid.text.substr(40, 4) == "  4[" &&
           grid.text.substr(80, 4) == "  8[",
           "twelve CPUs form four rows and three equal-height columns");
     cpu_fixture(cpus, 10);
-    grid = cpu_grid_line(cpus, 0, 4, 120);
+    grid = cpu_grid_line(cpus, 0, cpu_grid_layout(120, 4));
     check(grid.text.starts_with("  0[") && grid.text.substr(30, 4) == "  3[" &&
           grid.text.substr(60, 4) == "  6[" && grid.text.substr(90, 4) == "  8[",
           "uneven CPU counts are balanced across columns");
-    grid = cpu_grid_line(cpus, 2, 4, 120);
+    grid = cpu_grid_line(cpus, 2, cpu_grid_layout(120, 4));
     check(grid.text.starts_with("  2[") && grid.text.substr(30, 4) == "  5[" &&
           grid.text.size() == 60, "only longer columns contain a final CPU");
     cpu_t full_cpu{};
