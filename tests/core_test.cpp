@@ -57,6 +57,16 @@ static void test_layout()
           "process name and counters in normal mode");
     check(normal[1].text.find("[jail:69] process") != std::string::npos, "process list retains jail prefix");
     auto detail = lines(snapshot, 10);
+    auto deferred = lines(snapshot, 10, false);
+    check(deferred.size() == detail.size() && deferred[0].text == detail[0].text,
+          "deferred layout preserves header and row count");
+    for (size_t i = 1; i < deferred.size(); ++i)
+    {
+        const auto& row = deferred[i];
+        check(row.text.empty() && row.pid == detail[i].pid && row.tid == detail[i].tid &&
+              process_line(*row.record, row.thread, *row.command_source, true, row.affinity_width) == detail[i].text,
+              "deferred rows retain identity and produce identical text on demand");
+    }
     check(detail[0].text.find(" CPU ") == std::string::npos &&
           detail[0].text.find("UCPU") != std::string::npos && detail[0].text.find("SCPU") != std::string::npos,
           "user detail shows split CPU columns without total CPU");
@@ -169,14 +179,6 @@ static void test_cpu()
     auto percentages = cpu_percentages(ticks, zero);
     check(percentages[CP_USER] == 100 && percentages[CP_SYS] == 200 && percentages[CP_IDLE] == 700,
           "CPU proportions use tenths of a percent");
-    cpu_t cpu;
-    cpu.percent_tenths = percentages;
-    terminal_row_t bar;
-    cpu_bar(cpu, 10, bar);
-    check(bar.text.size() == 3 && bar.colors.size() == 2 &&
-          bar.colors[0].offset == 0 && bar.colors[1].offset == 1, "CPU segment lengths and cumulative boundaries");
-    cpu_bar(cpu, 0, bar);
-    check(bar.text.empty() && bar.colors.empty(), "zero-height CPU bar is empty");
     check(text("a\033\xff", 3) == "a??", "sampler sanitizes terminal control and non-ASCII bytes");
 }
 

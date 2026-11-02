@@ -73,8 +73,8 @@ terminals without an alternate screen.
 Rendering reuses frame/output buffers and skips unchanged rows. The terminal
 module supports changed-span updates for plain ASCII rows, merging nearby
 changes to reduce cursor and style commands. Rows with a right-side CPU bar,
-color spans, or multibyte text use whole-row updates when changed. Since the TUI
-reserves a CPU-bar cell on every row, changed TUI rows use whole-row updates.
+color spans, or multibyte text use whole-row updates when changed. The TUI
+uses plain ASCII rows without CPU bars, enabling changed-span updates.
 No terminfo library is used.
 The terminal is queried for synchronized-output mode (DEC mode 2026); frames
 are bracketed only after a response confirms support. Terminals that do not
@@ -87,26 +87,13 @@ usernames, and wait-channel text with `?` before they reach the renderer.
 
 ## Display
 
-A fixed one-column CPU bar on the right edge uses full blocks (U+2588)
-without brackets, labels or numbers. The full terminal height represents 100%
-of aggregate logical CPU capacity.
-Segments fill from bottom to top: user plus nice in green, system in red, and
-interrupts in yellow. Idle capacity above them is blank. Segment boundaries are
-rounded to the nearest cell using cumulative percentages, so very small segments
-may not be visible.
-The bar uses colored text on the default background without reverse video.
-If the active character locale cannot decode UTF-8 U+2588 as a single-column
-character, the bar uses ASCII `-` instead, with the same colors and proportions.
-Font glyph availability cannot be detected automatically.
-The first sample uses proportions since boot; subsequent samples use interval
-proportions. Intervals without CPU ticks leave the bar blank.
+There is no right-side CPU bar.
 The process table header stays fixed on the first line.
 All rows below the header are available for processes and threads.
-The table uses the columns to the left of the CPU bar. In a one-column terminal,
-only the CPU bar is visible.
+The table uses the full terminal width.
 Load averages, process summaries, and keyboard hints are not shown.
 Header fields use the terminal's default text color; the selected row uses ANSI
-blue. Table backgrounds remain unchanged.
+blue in the process list and ANSI green in the thread list. Table backgrounds remain unchanged.
 Colors use the terminal's 16-color palette, so their appearance depends on its
 theme. Header and selection highlighting do not use reverse video.
 Foreground changes fully reset rendition before applying the color and any
@@ -219,7 +206,10 @@ without thread or affinity queries. Detail mode queries only the target PID's
 process record and threads; hidden kernel-thread affinity and thread usernames
 are not collected. Switching views samples immediately and resets record-rate
 baselines, so context-switch rate suffixes are hidden until rates become available.
-Selection changes reuse the existing formatted rows without copying the list.
+Only visible rows are formatted, lazily on first display after each sample.
+Selection changes and scrolling reuse already formatted rows without copying
+the list. Input waits until the next sample deadline rather than polling every
+100 ms; keyboard/mouse input and signals can wake it earlier.
 
 The first snapshot uses the kernel CPU estimate; later snapshots use runtime
 differences without process-age weighting. A multi-threaded process can exceed
@@ -249,8 +239,8 @@ from `CPU`.
 ### System CPU sampling
 
 `top_sample` accepts an optional detail PID (`-1` for the process list) and
-collects whole-system and per-CPU data. The right-side bar uses
-the whole-system summary; individual CPU data is not displayed.
+collects whole-system and per-CPU data. These system CPU summaries are retained
+in the sampling API but are not displayed by the TUI.
 Like FreeBSD `top`, it sizes the per-CPU buffer using
 `kern.smp.maxcpus`, reads `kern.cp_times`, and omits CPU slots whose counters
 are all zero. `snapshot.cpus` retains the actual CPU IDs in ascending order,
@@ -283,7 +273,7 @@ returning, including on errors.
 | Files | Responsibility |
 | --- | --- |
 | `top.cpp` / `top.h` | Process and thread sampling through `kvm_getprocs`, including per-thread context-switch counts, username lookup, and ascending PID sorting; whole-system and per-CPU counters and percentages through sysctl. |
-| `tui.cpp` / `tui.h` | Process-table and aggregate CPU-bar layout, selection, scrolling, thread expansion, and refresh loop. |
+| `tui.cpp` / `tui.h` | Process/thread table layout, selection, scrolling, detail mode, and refresh loop. |
 | `terminal.cpp` / `terminal.h` | VT rendering, terminal modes and restoration, signal handling, resizing, and keyboard/mouse input decoding. |
 | `main.cpp` | Application startup and cleanup. |
 

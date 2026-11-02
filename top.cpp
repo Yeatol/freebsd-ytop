@@ -320,8 +320,7 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int d
                 }
             }
         }
-        auto first_seen = same_process ? previous_record->second.first_seen : sample_timestamp;
-        history.emplace(record_id, previous_process_t{first_seen, p.ki_runtime, user_time_us, system_time_us, nvcsw, nivcsw});
+        history.emplace(record_id, previous_process_t{p.ki_runtime, user_time_us, system_time_us, nvcsw, nivcsw});
         if (threads)
         {
             cpu_fraction = std::min(cpu_fraction, 1.0);
@@ -365,7 +364,6 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int d
         int      cpu_id      = p.ki_stat == SRUN && p.ki_oncpu != NOCPU ? p.ki_oncpu : p.ki_lastcpu;
         uint64_t size_kb     = static_cast<uint64_t>(p.ki_size) / 1024;
         uint64_t resident_kb = static_cast<uint64_t>(p.ki_rssize) * top.page_size / 1024;
-        uint64_t swap_kb     = static_cast<uint64_t>(p.ki_swrss > p.ki_rssize ? p.ki_swrss - p.ki_rssize : 0) * top.page_size / 1024;
         next.processes.push_back(process_t{
             .pid                = p.ki_pid,
             .tid                = p.ki_tid,
@@ -377,7 +375,6 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int d
             .nice               = nice(p),
             .size_kb            = size_kb,
             .resident_kb        = resident_kb,
-            .swap_kb            = swap_kb,
             .state              = state(p),
             .cpu                = cpu_id == NOCPU ? -1 : cpu_id,
             .runtime_us         = p.ki_runtime,
@@ -391,7 +388,10 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int d
             .command            = command,
             .affinity           = affinity});
     }
-    std::ranges::sort(next.processes, compare_processes);
+    if (!threads)
+    {
+        std::ranges::sort(next.processes, compare_processes);
+    }
     snapshot                = std::move(next);
     next_history.previous   = std::move(history);
     next_history.sampled_at = sample_timestamp;

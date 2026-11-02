@@ -63,16 +63,19 @@ static std::string runtime(uint64_t microseconds)
 
 struct display_row_t
 {
-    std::string text;
-    int         pid     = -1;
-    lwpid_t     tid     = -1;
-    bool        thread  = false;
-    int         threads = 0;
+    std::string      text;
+    int              pid            = -1;
+    lwpid_t          tid            = -1;
+    bool             thread         = false;
+    int              threads        = 0;
+    const process_t* record         = nullptr;
+    const process_t* command_source = nullptr;
+    size_t           affinity_width = 3;
 };
 
 static std::string switch_number(long double value)
 {
-    auto result = std::format("{:.0f}", value);
+    char suffix = '\0';
     for (char unit : std::string_view("KMGTPE"))
     {
         if (value < 999.5L)
@@ -80,9 +83,9 @@ static std::string switch_number(long double value)
             break;
         }
         value /= 1000;
-        result = std::format("{:.0f}{}", value, unit);
+        suffix = unit;
     }
-    return result;
+    return suffix == '\0' ? std::format("{:.0f}", value) : std::format("{:.0f}{}", value, suffix);
 }
 
 static std::string switch_value(uint64_t count, const std::optional<double>& rate)
@@ -177,7 +180,7 @@ static std::string process_line(const process_t& p, bool thread, const process_t
     return row;
 }
 
-static std::vector<display_row_t> lines(const snapshot_t& snapshot, int detail_pid)
+static std::vector<display_row_t> lines(const snapshot_t& snapshot, int detail_pid, bool format_rows = true)
 {
     std::vector<display_row_t> result;
     result.reserve(1 + snapshot.processes.size() + (detail_pid == -1 ? 0 : snapshot.threads.size()));
@@ -249,11 +252,20 @@ static std::vector<display_row_t> lines(const snapshot_t& snapshot, int detail_p
     }
     header += detail_pid == -1 ? "COMMAND" : "THREAD";
     result.push_back({header});
+    auto append = [&](const process_t& p, bool thread, const process_t& source) {
+        std::string text;
+        if (format_rows)
+        {
+            text = process_line(p, thread, source, detail_pid != -1, affinity_width);
+        }
+        result.push_back({std::move(text), p.pid, p.tid, thread, thread ? 1 : p.threads,
+                          &p, &source, affinity_width});
+    };
     for (const auto& p : snapshot.processes)
     {
         if (detail_pid == -1)
         {
-            result.push_back({process_line(p, false, p), p.pid, p.tid, false, p.threads});
+            append(p, false, p);
             continue;
         }
         if (p.pid != detail_pid)
@@ -269,12 +281,12 @@ static std::vector<display_row_t> lines(const snapshot_t& snapshot, int detail_p
         {
             command_source = &*representative;
         }
-        result.push_back({process_line(p, false, *command_source, true, affinity_width), p.pid, p.tid, false, p.threads});
+        append(p, false, *command_source);
         for (auto thread = thread_begin; thread != thread_end; ++thread)
         {
             if (thread->tid != p.tid)
             {
-                result.push_back({process_line(*thread, true, *thread, false, affinity_width), thread->pid, thread->tid, true, 1});
+                append(*thread, true, *thread);
             }
         }
     }
@@ -319,35 +331,6 @@ static void move_selection(const std::vector<display_row_t>& output, int directi
     }
 }
 
-static void cpu_bar(const cpu_t& cpu, int width, terminal_row_t& row)
-{
-    row.text.clear();
-    row.colors.clear();
-    row.reverse = false;
-    if (width <= 0)
-    {
-        return;
-    }
-    const auto& percentages = cpu.percent_tenths;
-    const int   usage[]     = {
-        percentages[CP_USER] + percentages[CP_NICE],
-        percentages[CP_SYS],
-        percentages[CP_INTR]};
-    constexpr terminal_color_t colors[] = {
-        terminal_color_t::green, terminal_color_t::red, terminal_color_t::yellow};
-    int total = 0;
-    for (size_t i = 0; i < std::size(usage); ++i)
-    {
-        total += usage[i];
-        size_t end = static_cast<size_t>((static_cast<int64_t>(width) * std::clamp(total, 0, 1000) + 500) / 1000);
-        if (end > row.text.size())
-        {
-            row.colors.push_back({row.text.size(), colors[i]});
-            row.text.resize(end, '|');
-        }
-    }
-}
-
 int tui(top_t& top)
 {
     std::string error;
@@ -374,14 +357,13 @@ int tui(top_t& top)
 
             std::vector<display_row_t>  display_output;
             std::vector<terminal_row_t> frame;
-            terminal_row_t              bar;
             auto                        refresh = [&] {
                 if (!top_sample(top, snapshot, error, filtered_pid))
                 {
                     status = 1;
                     return false;
                 }
-                display_output = lines(snapshot, filtered_pid);
+                display_output = lines(snapshot, filtered_pid, false);
                 next_sample    = std::chrono::steady_clock::now() + std::chrono::seconds(1);
                 redraw         = true;
                 return true;
@@ -452,7 +434,7 @@ int tui(top_t& top)
                 int height             = terminal.height;
                 int width              = terminal.width;
                 int total_rows         = static_cast<int>(display_output.size()) - 1;
-                int table_width        = std::max(0, width - 1);
+                int table_width        = width;
                 int visible_rows       = std::max(0, height - 1);
                 int max_offset         = std::max(0, total_rows - visible_rows);
                 scroll_offset          = std::clamp(scroll_offset, 0, max_offset);
@@ -460,17 +442,6 @@ int tui(top_t& top)
                 if (redraw)
                 {
                     frame.resize(static_cast<size_t>(height));
-                    cpu_bar(snapshot.cpu, height, bar);
-                    size_t color_index = 0;
-                    auto   bar_color   = terminal_color_t::normal;
-                    for (int row = 0; row < height; ++row)
-                    {
-                        while (color_index < bar.colors.size() && bar.colors[color_index].offset <= static_cast<size_t>(row))
-                        {
-                            bar_color = bar.colors[color_index++].color;
-                        }
-                        frame[height - 1 - row].right_bar = {static_cast<size_t>(row) < bar.text.size() ? bar_color : terminal_color_t::normal};
-                    }
                     for (int row = 0; row < height; ++row)
                     {
                         frame[row].reverse    = false;
@@ -482,10 +453,17 @@ int tui(top_t& top)
                             frame[row].text.clear();
                             continue;
                         }
-                        int  output_row_index = table_row == 0 ? 0 : table_row + scroll_offset;
-                        bool row_is_selected  = table_row > 0 && display_output[output_row_index].pid == selected_pid && (display_output[output_row_index].thread ? display_output[output_row_index].tid == selected_tid : selected_tid == -1);
-                        frame[row].text       = display_output[output_row_index].text;
-                        frame[row].foreground = row_is_selected ? terminal_color_t::blue : terminal_color_t::normal;
+                        int   output_row_index = table_row == 0 ? 0 : table_row + scroll_offset;
+                        bool  row_is_selected  = table_row > 0 && display_output[output_row_index].pid == selected_pid && (display_output[output_row_index].thread ? display_output[output_row_index].tid == selected_tid : selected_tid == -1);
+                        auto& displayed        = display_output[output_row_index];
+                        if (table_row != 0 && displayed.text.empty())
+                        {
+                            displayed.text = process_line(*displayed.record, displayed.thread, *displayed.command_source,
+                                                          filtered_pid != -1, displayed.affinity_width);
+                        }
+                        frame[row].text       = displayed.text;
+                        auto selection_color  = filtered_pid == -1 ? terminal_color_t::blue : terminal_color_t::green;
+                        frame[row].foreground = row_is_selected ? selection_color : terminal_color_t::normal;
                     }
                     if (!terminal_render(terminal, frame, error))
                     {
@@ -495,7 +473,9 @@ int tui(top_t& top)
                     redraw = false;
                 }
                 terminal_event_t input;
-                if (!terminal_read(terminal, input, 100, error))
+                auto             remaining  = std::chrono::ceil<std::chrono::milliseconds>(next_sample - std::chrono::steady_clock::now()).count();
+                int              timeout_ms = static_cast<int>(std::clamp<int64_t>(remaining, 0, 1000));
+                if (!terminal_read(terminal, input, timeout_ms, error))
                 {
                     status = 1;
                     break;

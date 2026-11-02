@@ -52,7 +52,6 @@ struct process_t
     std::string           nice;
     uint64_t              size_kb;
     uint64_t              resident_kb;
-    uint64_t              swap_kb;
     std::string           state;
     int                   cpu;
     uint64_t              runtime_us;
@@ -84,12 +83,11 @@ struct snapshot_t
 
 struct previous_process_t
 {
-    std::chrono::steady_clock::time_point first_seen;
-    uint64_t                              runtime_us;
-    uint64_t                              user_us;
-    uint64_t                              system_us;
-    uint64_t                              nvcsw;
-    uint64_t                              nivcsw;
+    uint64_t runtime_us;
+    uint64_t user_us;
+    uint64_t system_us;
+    uint64_t nvcsw;
+    uint64_t nivcsw;
 };
 
 struct top_t
