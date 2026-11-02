@@ -230,7 +230,7 @@ static bool ascii_text(std::string_view text)
     return std::ranges::all_of(text, [](unsigned char ch) { return ch >= 32 && ch < 127; });
 }
 
-static void display_text(std::string_view text, int width, bool reverse, std::string& result)
+static bool display_text(std::string_view text, int width, bool reverse, std::string& result)
 {
     result.clear();
     if (ascii_text(text))
@@ -240,7 +240,7 @@ static void display_text(std::string_view text, int width, bool reverse, std::st
         {
             result.resize(static_cast<size_t>(width), ' ');
         }
-        return;
+        return true;
     }
     mbstate_t state{};
     int       columns = 0;
@@ -286,6 +286,7 @@ static void display_text(std::string_view text, int width, bool reverse, std::st
     {
         result.append(static_cast<size_t>(width - columns), ' ');
     }
+    return ascii_text(result);
 }
 
 static void move_cursor(std::string& output, int row, int column, int& cursor_row, int& cursor_column)
@@ -351,12 +352,13 @@ bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& ro
     for (int row = 0; row < terminal.height; ++row)
     {
         auto& line   = frame[row];
+        bool  ascii  = true;
         line.reverse = false;
         line.text.clear();
         if (static_cast<size_t>(row) < rows.size())
         {
             line.reverse = rows[row].reverse;
-            display_text(rows[row].text, terminal.width, line.reverse, line.text);
+            ascii        = display_text(rows[row].text, terminal.width, line.reverse, line.text);
         }
         const auto* previous = static_cast<size_t>(row) < terminal.previous.size() ? &terminal.previous[row] : nullptr;
         if (previous != nullptr && line.text == previous->text && line.reverse == previous->reverse)
@@ -369,10 +371,9 @@ bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& ro
             reverse = line.reverse;
         }
         if (previous == nullptr || line.reverse != previous->reverse ||
-            !ascii_text(line.text) || !ascii_text(previous->text))
+            !ascii || !ascii_text(previous->text))
         {
             move_cursor(output, row, 0, cursor_row, cursor_column);
-            bool ascii = ascii_text(line.text);
             if (!ascii)
             {
                 output += "\033[2K";

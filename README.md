@@ -60,6 +60,8 @@ terminals without an alternate screen.
 Rendering reuses frame/output buffers and updates changed ASCII spans, merging
 nearby changes to reduce cursor and style commands. Rows containing multibyte
 text retain whole-row updates. No terminfo library is used.
+ASCII classification is reused within each row's rendering operation, without
+adding classification state to the cross-frame cache.
 The terminal is queried for synchronized-output mode (DEC mode 2026); frames
 are bracketed only after a response confirms support. Terminals that do not
 respond or report no support continue with ordinary buffered updates.

@@ -159,6 +159,20 @@ static void test_render(terminal_t& terminal, int master)
     check(terminal_render(terminal, rows, error), error.c_str());
     drain(master);
     check(terminal.previous[0].text == "???", "invalid bytes, NUL and newline are sanitized");
+    rows = {{"?" "?!"}};
+    check(terminal_render(terminal, rows, error), error.c_str());
+    output = drain(master);
+    check(output.find('!') != std::string::npos && output.find("\033[2K") == std::string::npos,
+          "sanitized ASCII output remains eligible for differential updates");
+    rows = {{"abc\xe4\xb8\xad"}};
+    check(terminal_render(terminal, rows, error), error.c_str());
+    drain(master);
+    rows = {{"abd\xe4\xb8\xad"}};
+    check(terminal_render(terminal, rows, error), error.c_str());
+    output = drain(master);
+    check(terminal.previous[0].text == "abd" && output.find('d') != std::string::npos &&
+          output.find('a') == std::string::npos && output.find("\033[2K") == std::string::npos,
+          "clipped non-ASCII suffix does not disable ASCII differential updates");
     rows = {{"e\xcc\x81" "ab"}};
     check(terminal_render(terminal, rows, error), error.c_str());
     drain(master);
