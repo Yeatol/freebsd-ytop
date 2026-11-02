@@ -59,6 +59,8 @@ struct process_t
     double                cpu_percent;
     uint64_t              nvcsw;
     uint64_t              nivcsw;
+    std::optional<double> nvcsw_per_second;
+    std::optional<double> nivcsw_per_second;
     std::optional<double> user_cpu_percent;
     std::optional<double> system_cpu_percent;
     std::string           command;
@@ -86,6 +88,8 @@ struct previous_process_t
     uint64_t                              runtime_us;
     uint64_t                              user_us;
     uint64_t                              system_us;
+    uint64_t                              nvcsw;
+    uint64_t                              nivcsw;
 };
 
 struct top_t

@@ -195,6 +195,15 @@ struct sample_history_t
     std::chrono::steady_clock::time_point       sampled_at;
 };
 
+static std::optional<double> counter_rate(uint64_t current, uint64_t previous, uint64_t interval_us)
+{
+    if (interval_us == 0 || current < previous)
+    {
+        return std::nullopt;
+    }
+    return static_cast<double>(current - previous) * 1000000.0 / interval_us;
+}
+
 static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, const std::unordered_map<int, previous_process_t>& previous, std::chrono::steady_clock::time_point sampled_at, sample_history_t& next_history, std::string& error)
 {
     int         count   = 0;
@@ -267,9 +276,18 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, const
             user_cpu   = 0.0;
             system_cpu = 0.0;
         }
-        int  record_id       = threads ? p.ki_tid : p.ki_pid;
-        auto previous_record = previous.find(record_id);
-        bool same_process    = previous_record != previous.end() && p.ki_runtime >= previous_record->second.runtime_us;
+        int                   record_id       = threads ? p.ki_tid : p.ki_pid;
+        auto                  previous_record = previous.find(record_id);
+        bool                  same_process    = previous_record != previous.end() && p.ki_runtime >= previous_record->second.runtime_us;
+        auto                  nvcsw           = static_cast<uint64_t>(p.ki_rusage.ru_nvcsw);
+        auto                  nivcsw          = static_cast<uint64_t>(p.ki_rusage.ru_nivcsw);
+        std::optional<double> nvcsw_per_second;
+        std::optional<double> nivcsw_per_second;
+        if (same_process)
+        {
+            nvcsw_per_second  = counter_rate(nvcsw, previous_record->second.nvcsw, sample_interval_us);
+            nivcsw_per_second = counter_rate(nivcsw, previous_record->second.nivcsw, sample_interval_us);
+        }
         if (sample_interval_us != 0)
         {
             // A PID may have been reused between samples.
@@ -293,7 +311,7 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, const
             }
         }
         auto first_seen = same_process ? previous_record->second.first_seen : sample_timestamp;
-        history.emplace(record_id, previous_process_t{first_seen, p.ki_runtime, user_time_us, system_time_us});
+        history.emplace(record_id, previous_process_t{first_seen, p.ki_runtime, user_time_us, system_time_us, nvcsw, nivcsw});
         if (threads)
         {
             cpu_fraction = std::min(cpu_fraction, 1.0);
@@ -349,8 +367,10 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, const
             .cpu                = cpu_id == NOCPU ? -1 : cpu_id,
             .runtime_us         = p.ki_runtime,
             .cpu_percent        = cpu_fraction * 100,
-            .nvcsw              = static_cast<uint64_t>(p.ki_rusage.ru_nvcsw),
-            .nivcsw             = static_cast<uint64_t>(p.ki_rusage.ru_nivcsw),
+            .nvcsw              = nvcsw,
+            .nivcsw             = nivcsw,
+            .nvcsw_per_second   = nvcsw_per_second,
+            .nivcsw_per_second  = nivcsw_per_second,
             .user_cpu_percent   = user_cpu,
             .system_cpu_percent = system_cpu,
             .command            = command,

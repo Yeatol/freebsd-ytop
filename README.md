@@ -25,7 +25,13 @@ Terminal-module regression tests use a pseudo-terminal and FreeBSD's base
 ```sh
 make -C tests
 ./tests/terminal_test
+./tests/core_test
 ```
+
+Core regression tests cover table layout, selection, CPU calculations, and live
+process/thread sampling. They temporarily restrict only their own main thread's
+CPU affinity and restore it afterwards; run with permission to query the
+processes and threads visible to the monitor.
 
 An interactive VT-compatible terminal is required, such as the FreeBSD console
 or an xterm-compatible terminal over SSH or ttyd. `TERM` must be set and must
@@ -131,9 +137,9 @@ omits affinity information.
 CPU percentage columns are followed by the user-thread affinity column `A`,
 then `C`, before the name column labeled `THREAD` instead of `COMMAND`.
 
-There is no separate JID column. Commands for processes and threads with
+There is no separate JID column. In the normal process list, commands with
 `ki_jid > 0` are prefixed with `[jail:ID] `; host processes (`ki_jid == 0`) have
-no jail prefix.
+no jail prefix. Detail-mode thread names omit the jail prefix on all rows.
 
 ### Threads and detail mode
 
@@ -158,8 +164,14 @@ when the thread name is empty.
 In detail mode, the parent `THREAD` also uses the thread name matching its
 displayed TID; other parent columns retain process-wide values. The parent and
 each displayed thread show cumulative involuntary and voluntary context-switch
-counts appended to `THREAD` as `(nivcsw=N, nvcsw=N)`. These are
-cumulative counts, not rates. They come from
+counts and rates appended to `THREAD` as
+`(nivcsw=N + X, nvcsw=N + Y)`, where the value after `+` is the per-second
+rate, not a sum to evaluate. Counts are cumulative; rates use counter
+differences divided by the actual elapsed sample time, rounded to integers.
+The ` + rate` suffix is omitted when the rounded rate is zero.
+Rates show `-` after `+` on the first sample, for a newly observed record, or when
+the corresponding counter decreases or no positive sample interval is available.
+The counters come from
 `ki_rusage.ru_nivcsw` and `ki_rusage.ru_nvcsw`, respectively. For a
 single-threaded process, detail mode shows the parent's counts without adding
 a thread row. If the representative thread
@@ -175,8 +187,8 @@ for both the header and values. For example:
 
 ```text
     A   C THREAD
-    0   0 thread (nivcsw=12, nvcsw=345)
-0,2,3   2 [jail:69] thread (nivcsw=67, nvcsw=8901)
+    0   0 thread (nivcsw=12, nvcsw=345 + 10)
+0,2,3   2 thread (nivcsw=67 + 2, nvcsw=8901 + 50)
 ```
 
 Masks equal to the monitor's root CPU set show `-` in `A`. Inherited process or jail

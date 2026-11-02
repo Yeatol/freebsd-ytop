@@ -120,14 +120,24 @@ static std::string process_line(const process_t& p, bool thread, const process_t
         }
         row += std::format("{:>3} ", cpu);
     }
-    if (p.jid > 0)
+    if (p.jid > 0 && !thread && !show_context_switches)
     {
         row += std::format("[jail:{}] ", p.jid);
     }
     row += command_source.command;
     if (thread || show_context_switches)
     {
-        row += std::format(" (nivcsw={}, nvcsw={})", command_source.nivcsw, command_source.nvcsw);
+        auto rate = [](const std::optional<double>& value) {
+            if (!value.has_value())
+            {
+                return std::string(" + -");
+            }
+            auto rounded = std::format("{:.0f}", *value);
+            return rounded == "0" ? std::string{} : " + " + rounded;
+        };
+        row += std::format(" (nivcsw={}{}, nvcsw={}{})",
+                           command_source.nivcsw, rate(command_source.nivcsw_per_second),
+                           command_source.nvcsw, rate(command_source.nvcsw_per_second));
     }
     return row;
 }
