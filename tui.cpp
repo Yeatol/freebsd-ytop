@@ -231,10 +231,6 @@ int tui(top_t& top)
                         status = 1;
                         break;
                     }
-                    if (!top.previous.contains(selected_pid))
-                    {
-                        selected_pid = -1;
-                    }
                     for (auto it = expanded.begin(); it != expanded.end();)
                     {
                         auto process = top.previous.find(it->first);
@@ -247,7 +243,17 @@ int tui(top_t& top)
                             ++it;
                         }
                     }
-                    output      = lines(snapshot, expanded);
+                    output = lines(snapshot, expanded);
+                    if (selected_pid != -1 && !std::ranges::any_of(output, [&](const display_row_t& row) {
+                            return row.pid == selected_pid && (row.thread ? row.tid == selected_tid : selected_tid == -1);
+                        }))
+                    {
+                        selected_pid      = -1;
+                        selected_tid      = -1;
+                        pressed_pid       = -1;
+                        pressed_tid       = -1;
+                        toggle_on_release = false;
+                    }
                     next_sample = std::chrono::steady_clock::now() + std::chrono::seconds(1);
                     redraw      = true;
                 }
@@ -339,7 +345,7 @@ int tui(top_t& top)
                         toggle_on_release = false;
                     }
                 }
-                else if (input.kind == terminal_event_kind_t::escape)
+                else if (input.kind == terminal_event_kind_t::escape || input.kind == terminal_event_kind_t::mouse_right_press)
                 {
                     selected_pid      = -1;
                     selected_tid      = -1;

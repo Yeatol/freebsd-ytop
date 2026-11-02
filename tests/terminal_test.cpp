@@ -83,6 +83,10 @@ static void test_input(terminal_t& terminal, int master)
     expect_event(terminal, master, "\033[M#!!", terminal_event_kind_t::mouse_release);
     expect_event(terminal, master, "\033[M`!!", terminal_event_kind_t::wheel_up);
     expect_event(terminal, master, "\033[<1;1;1M", terminal_event_kind_t::none);
+    expect_event(terminal, master, "\033[<2;4;3M", terminal_event_kind_t::mouse_right_press, 3, 2);
+    expect_event(terminal, master, "\033[<2;4;3m", terminal_event_kind_t::none, 3, 2);
+    expect_event(terminal, master, "\033[M\"!!", terminal_event_kind_t::mouse_right_press);
+    expect_event(terminal, master, "\033[M#!!", terminal_event_kind_t::mouse_release);
     expect_event(terminal, master, "\033[<32;1;1M", terminal_event_kind_t::none);
     expect_event(terminal, master, "\033[<128;1;1M", terminal_event_kind_t::none);
     expect_event(terminal, master, "\033[<0;0;1M", terminal_event_kind_t::none);
@@ -99,6 +103,14 @@ static void test_input(terminal_t& terminal, int master)
     usleep(120000);
     check(read_event(terminal).kind == terminal_event_kind_t::escape, "standalone Escape produces cancellation event");
     check(terminal.input.empty(), "expired Escape is removed");
+    expect_event(terminal, master, "\033\033[B", terminal_event_kind_t::escape);
+    check(read_event(terminal).kind == terminal_event_kind_t::down, "Escape preserves following arrow sequence");
+    expect_event(terminal, master, "\033\033[A", terminal_event_kind_t::escape);
+    check(read_event(terminal).kind == terminal_event_kind_t::up, "Escape preserves following up sequence");
+    expect_event(terminal, master, "\033\033[<0;4;3M", terminal_event_kind_t::escape);
+    auto mouse_after_escape = read_event(terminal);
+    check(mouse_after_escape.kind == terminal_event_kind_t::mouse_press &&
+          mouse_after_escape.x == 3 && mouse_after_escape.y == 2, "Escape preserves following mouse report");
     expect_event(terminal, master, "\033[<0;", terminal_event_kind_t::none);
     usleep(120000);
     check(read_event(terminal).kind == terminal_event_kind_t::none, "incomplete mouse report waits without a key event");

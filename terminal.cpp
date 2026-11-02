@@ -506,6 +506,10 @@ static void mouse_event(terminal_event_t& event, int button, int x, int y, bool 
             event.kind = button == 64 ? terminal_event_kind_t::wheel_up : terminal_event_kind_t::wheel_down;
         }
     }
+    else if (button == 2 && !released)
+    {
+        event.kind = terminal_event_kind_t::mouse_right_press;
+    }
     else if (button == 0 || button == 3)
     {
         event.kind = released || button == 3 ? terminal_event_kind_t::mouse_release : terminal_event_kind_t::mouse_press;
@@ -569,7 +573,11 @@ static bool decode_input(terminal_t& terminal, terminal_event_t& event)
             {
                 return false;
             }
-            if (terminal.input[1] == '[' && terminal.input.size() >= 3 && terminal.input[2] == 'M')
+            if (terminal.input[1] == '\033')
+            {
+                event.kind = terminal_event_kind_t::escape;
+            }
+            else if (terminal.input[1] == '[' && terminal.input.size() >= 3 && terminal.input[2] == 'M')
             {
                 auto next_escape = terminal.input.find('\033', 3);
                 if (next_escape < 6)

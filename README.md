@@ -41,9 +41,10 @@ access is not required when the system permits access.
 | `Space` | For a selected multi-threaded process, expand or collapse its thread rows. For a selected single-threaded process, show or hide its main thread's context-switch counts. On a selected thread row, collapse its parent process and select the parent row, keeping it visible. Does nothing when nothing is selected. |
 | Left-click | Select a process or thread. Clicking the already selected process toggles its thread rows when it has more than one thread, or toggles its main thread's context-switch counts when it has one thread. Clicking an already selected thread collapses its parent process and selects the parent row, keeping it visible. Clicking the header or blank space does not change the selection. |
 | Mouse wheel | Scroll three rows per step. Scrolling is bounded by the list and adjusted when rows disappear or collapse. |
-| `Esc` | Clear the selection without collapsing expanded processes or changing the scroll position. |
+| `Esc` / Right-click | Clear the selection without collapsing expanded processes or changing the scroll position. |
 | `q` / `Ctrl+C` | Quit and restore the terminal. |
 
+Selection of a process or thread that disappears is cleared on the next sample.
 Other keyboard input is ignored. Terminal resizing is supported. Escape keys and
 incomplete mouse escape sequences do not exit the monitor. Partial reports are
 retained across input timeouts; a new escape sequence resynchronizes truncated

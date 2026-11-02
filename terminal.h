@@ -45,6 +45,7 @@ enum class terminal_event_kind_t
     down,
     mouse_press,
     mouse_release,
+    mouse_right_press,
     wheel_up,
     wheel_down
 };
