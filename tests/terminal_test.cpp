@@ -403,6 +403,27 @@ static void test_differential_render(terminal_t& terminal, int master)
     auto header = render();
     check(header.find("\033[0m\033[39m") != std::string::npos, "colored header fully resets before default foreground");
     check(render().empty(), "unchanged colored header emits no bytes");
+    rows[0].text.assign(120, '|');
+    rows[0].colors = {{0, terminal_color_t::bright_black}, {4, terminal_color_t::green},
+                      {50, terminal_color_t::red}, {65, terminal_color_t::yellow},
+                      {70, terminal_color_t::bright_black}};
+    render();
+    rows[0].colors[2].offset = 51;
+    auto boundary = render();
+    check(boundary.size() <= 40 && boundary.find("||") == std::string::npos,
+          "moving a CPU color boundary rewrites only the changed cell");
+    rows[0].text[119] = ']';
+    render();
+    rows[0].colors.insert(rows[0].colors.begin(), {0, terminal_color_t::normal});
+    check(render().empty(), "equivalent color spans do not cause output");
+    rows[0].colors.clear();
+    render();
+    rows[0].colors = {{0, terminal_color_t::bright_cyan}, {120, terminal_color_t::red}};
+    render();
+    rows[0].text.resize(80);
+    render();
+    rows[0].text.resize(120, '|');
+    render();
     rows[1].foreground = terminal_color_t::green;
     auto selected = render();
     check(selected.find("\033[0m\033[32m") != std::string::npos, "first selection fully resets before ordinary green");
@@ -464,6 +485,23 @@ static void test_differential_render(terminal_t& terminal, int master)
     render();
 
     uint32_t random = 12345;
+    for (int frame = 0; frame < 200; ++frame)
+    {
+        random = random * 1664525 + 1013904223;
+        size_t row = (random >> 16) % rows.size();
+        rows[row].text.assign(120, '|');
+        rows[row].text[(random >> 8) % 120] = ']';
+        rows[row].colors = {{0, terminal_color_t::bright_black},
+                            {random % 61, terminal_color_t::green},
+                            {61 + random % 59, terminal_color_t::yellow},
+                            {120, terminal_color_t::normal}};
+        render();
+    }
+    for (auto& row : rows)
+    {
+        row.colors.clear();
+    }
+    render();
     for (int frame = 0; frame < 200; ++frame)
     {
         random = random * 1664525 + 1013904223;

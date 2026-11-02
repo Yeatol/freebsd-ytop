@@ -74,10 +74,13 @@ terminals without an alternate screen.
 
 Rendering reuses frame/output buffers and skips unchanged rows. The terminal
 module supports changed-span updates for plain ASCII rows, merging nearby
-changes to reduce cursor and style commands. Rows with a right-side CPU bar,
-color spans, or multibyte text use whole-row updates when changed. The TUI
-uses plain ASCII table rows, enabling changed-span updates; colored CPU grid
-rows use whole-row updates when changed.
+changes to reduce cursor and style commands. Equal-length ASCII rows with color
+spans use changed-cell updates for sparse text or foreground changes, including
+CPU usage boundaries. Dense color-boundary changes retain whole-row updates
+to avoid excessive cursor/style operations. Changes to row-wide style, text length, multibyte text, or right-side
+bars use whole-row updates. CPU grid rows are cached between samples and reused
+for selection and scrolling; sampling, resizing, and view changes invalidate
+the cache. Table formatting appends directly to preallocated row strings.
 No terminfo library is used.
 The terminal is queried for synchronized-output mode (DEC mode 2026); frames
 are bracketed only after a response confirms support. Terminals that do not

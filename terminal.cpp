@@ -360,6 +360,24 @@ static void set_foreground(std::string& output, terminal_color_t color, terminal
     }
 }
 
+static bool sparse_color_changes(const terminal_row_t& current, const terminal_row_t& previous)
+{
+    if (current.colors.size() != previous.colors.size())
+    {
+        return true;
+    }
+    int changes = 0;
+    for (size_t i = 0; i < current.colors.size(); ++i)
+    {
+        if (current.colors[i] != previous.colors[i] && ++changes > 3)
+        {
+            // Dense updates are cheaper as one row than many cursor/style changes.
+            return false;
+        }
+    }
+    return true;
+}
+
 bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& rows, std::string& error)
 {
     auto& frame  = terminal.frame;
@@ -425,6 +443,66 @@ bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& ro
             }
         }
         set_foreground(output, line.foreground, foreground, reverse);
+        if (previous != nullptr && ascii &&
+            line.text.size() == previous->text.size() && line.reverse == previous->reverse &&
+            line.foreground == previous->foreground && line.right_bar.empty() && previous->right_bar.empty() &&
+            (!line.colors.empty() || !previous->colors.empty()) && sparse_color_changes(line, *previous) &&
+            (!previous->colors.empty() || ascii_text(previous->text)))
+        {
+            size_t current_span   = 0;
+            size_t previous_span  = 0;
+            auto   current_color  = line.foreground;
+            auto   previous_color = previous->foreground;
+            size_t begin          = 0;
+            bool   writing        = false;
+            auto   run_color      = line.foreground;
+            bool   same_text      = line.text == previous->text;
+            auto   flush          = [&](size_t end) {
+                if (writing)
+                {
+                    move_cursor(output, row, static_cast<int>(begin), cursor_row, cursor_column);
+                    set_foreground(output, run_color, foreground, reverse);
+                    output.append(line.text, begin, end - begin);
+                    cursor_column = std::min(terminal.width - 1, static_cast<int>(end));
+                    writing       = false;
+                }
+            };
+            for (size_t column = 0; column < line.text.size();)
+            {
+                while (current_span < line.colors.size() && line.colors[current_span].offset <= column)
+                {
+                    current_color = line.colors[current_span++].color;
+                }
+                while (previous_span < previous->colors.size() && previous->colors[previous_span].offset <= column)
+                {
+                    previous_color = previous->colors[previous_span++].color;
+                }
+                bool changed = current_color != previous_color || (!same_text && line.text[column] != previous->text[column]);
+                if (!changed || (writing && current_color != run_color))
+                {
+                    flush(column);
+                }
+                if (changed && !writing)
+                {
+                    begin     = column;
+                    run_color = current_color;
+                    writing   = true;
+                }
+                if (same_text)
+                {
+                    size_t current_end  = current_span < line.colors.size() ? line.colors[current_span].offset : line.text.size();
+                    size_t previous_end = previous_span < previous->colors.size() ? previous->colors[previous_span].offset : line.text.size();
+                    column              = std::min({current_end, previous_end, line.text.size()});
+                }
+                else
+                {
+                    ++column;
+                }
+            }
+            flush(line.text.size());
+            set_foreground(output, line.foreground, foreground, reverse);
+            continue;
+        }
         if (previous == nullptr || line.reverse != previous->reverse ||
             line.foreground != previous->foreground || line.colors != previous->colors || !line.colors.empty() ||
             !line.right_bar.empty() || line.right_bar != previous->right_bar ||

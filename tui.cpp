@@ -117,38 +117,38 @@ static std::string process_line(const process_t& p, bool thread, const process_t
 {
     std::string cpu = p.cpu < 0 ? "-" : std::to_string(p.cpu);
     std::string row;
+    row.reserve(128 + affinity_width + command_source.command.size());
     if (thread || show_context_switches)
     {
-        row += std::format("{:>6} ", p.tid);
+        std::format_to(std::back_inserter(row), "{:>6} ", p.tid);
     }
     else
     {
-        row += std::format("{:>5} ", p.pid);
-        row += std::format("{:<10} ", p.username.substr(0, 10));
-        row += std::format("{:>4} ", p.threads);
+        std::format_to(std::back_inserter(row), "{:>5} {:<10} {:>4} ", p.pid,
+                       std::string_view(p.username).substr(0, 10), p.threads);
     }
-    row += std::format("{:>3} {:>4} ", p.priority, p.nice);
+    std::format_to(std::back_inserter(row), "{:>3} {:>4} ", p.priority, p.nice);
     if (!thread && !show_context_switches)
     {
-        row += std::format("{:>7} {:>6} ", memory(p.size_kb), memory(p.resident_kb));
+        std::format_to(std::back_inserter(row), "{:>7} {:>6} ", memory(p.size_kb), memory(p.resident_kb));
     }
     if (!thread && !show_context_switches)
     {
-        row += std::format("{:<6} {:>3} ", p.state.substr(0, 6), cpu);
+        std::format_to(std::back_inserter(row), "{:<6} {:>3} ", std::string_view(p.state).substr(0, 6), cpu);
     }
     else
     {
-        row += std::format("{:<6} ", p.state.substr(0, 6));
+        std::format_to(std::back_inserter(row), "{:<6} ", std::string_view(p.state).substr(0, 6));
         const auto values = switch_values(command_source);
         for (size_t i = 0; i < values.size(); ++i)
         {
-            row += std::format("{:<9} ", values[i]);
+            std::format_to(std::back_inserter(row), "{:<9} ", values[i]);
         }
     }
-    row += std::format("{:>6} ", runtime(p.runtime_us));
+    std::format_to(std::back_inserter(row), "{:>6} ", runtime(p.runtime_us));
     if ((!thread && !show_context_switches) || p.kernel_process)
     {
-        row += std::format("{:>8.2f}% ", p.cpu_percent);
+        std::format_to(std::back_inserter(row), "{:>8.2f}% ", p.cpu_percent);
     }
     if (thread || show_context_switches)
     {
@@ -158,23 +158,23 @@ static std::string process_line(const process_t& p, bool thread, const process_t
             {
                 if (percent.has_value())
                 {
-                    row += std::format("{:>8.2f}% ", *percent);
+                    std::format_to(std::back_inserter(row), "{:>8.2f}% ", *percent);
                 }
                 else
                 {
-                    row += std::format("{:>9} ", "-");
+                    std::format_to(std::back_inserter(row), "{:>9} ", "-");
                 }
             }
         }
         if (!p.kernel_process)
         {
-            row += std::format("{:>{}} ", command_source.affinity.empty() ? "-" : command_source.affinity, affinity_width);
+            std::format_to(std::back_inserter(row), "{:>{}} ", command_source.affinity.empty() ? "-" : command_source.affinity, affinity_width);
         }
-        row += std::format("{:>3} ", cpu);
+        std::format_to(std::back_inserter(row), "{:>3} ", cpu);
     }
     if (p.jid > 0 && !thread && !show_context_switches)
     {
-        row += std::format("[jail:{}] ", p.jid);
+        std::format_to(std::back_inserter(row), "[jail:{}] ", p.jid);
     }
     row += command_source.command;
     return row;
@@ -334,6 +334,8 @@ static void move_selection(const std::vector<display_row_t>& output, int directi
 static terminal_row_t cpu_line(const cpu_t& cpu, int cells = 10)
 {
     terminal_row_t row;
+    row.text.reserve(static_cast<size_t>(cells) + 5);
+    row.colors.reserve(5);
     row.text = std::format("{:>3}[", cpu.id);
     row.colors.push_back({0, terminal_color_t::bright_black});
     const size_t               start    = row.text.size();
@@ -405,10 +407,12 @@ static int cpu_prefix_rows(int count, int width, int height)
 static terminal_row_t cpu_grid_line(const std::vector<cpu_t>& cpus, int row, int columns, int width)
 {
     terminal_row_t result;
-    size_t         base_rows    = cpus.size() / static_cast<size_t>(columns);
-    size_t         extra_rows   = cpus.size() % static_cast<size_t>(columns);
-    int            column_width = width / columns;
-    int            cells        = std::max(0, column_width - 5);
+    result.text.reserve(static_cast<size_t>(width));
+    result.colors.reserve(static_cast<size_t>(columns) * 5);
+    size_t base_rows    = cpus.size() / static_cast<size_t>(columns);
+    size_t extra_rows   = cpus.size() % static_cast<size_t>(columns);
+    int    column_width = width / columns;
+    int    cells        = std::max(0, column_width - 5);
     for (int column = 0; column < columns; ++column)
     {
         size_t column_index = static_cast<size_t>(column);
@@ -453,10 +457,12 @@ int tui(top_t& top)
             lwpid_t    pressed_tid          = -1;
             bool       toggle_on_release    = false;
             bool       redraw               = true;
+            bool       cpu_rows_dirty       = true;
             auto       next_sample          = std::chrono::steady_clock::now();
 
             std::vector<display_row_t>  display_output;
             std::vector<terminal_row_t> frame;
+            std::vector<terminal_row_t> cpu_frame;
             auto                        refresh = [&] {
                 if (!top_sample(top, snapshot, error, filtered_pid))
                 {
@@ -464,6 +470,7 @@ int tui(top_t& top)
                     return false;
                 }
                 display_output = lines(snapshot, filtered_pid, false);
+                cpu_rows_dirty = true;
                 next_sample    = std::chrono::steady_clock::now() + std::chrono::seconds(1);
                 redraw         = true;
                 return true;
@@ -547,6 +554,15 @@ int tui(top_t& top)
                 int visible_line_count = std::min(visible_rows, total_rows - scroll_offset) + 1;
                 if (redraw)
                 {
+                    if (cpu_rows_dirty || resized)
+                    {
+                        cpu_frame.resize(static_cast<size_t>(cpu_rows));
+                        for (int row = 0; row < cpu_rows; ++row)
+                        {
+                            cpu_frame[row] = cpu_grid_line(snapshot.cpus, row, columns, cpu_width);
+                        }
+                        cpu_rows_dirty = false;
+                    }
                     frame.resize(static_cast<size_t>(height));
                     for (int row = 0; row < height; ++row)
                     {
@@ -555,7 +571,7 @@ int tui(top_t& top)
                         frame[row].colors.clear();
                         if (row >= cpu_start && row < cpu_start + cpu_rows)
                         {
-                            frame[row] = cpu_grid_line(snapshot.cpus, row - cpu_start, columns, cpu_width);
+                            frame[row] = cpu_frame[row - cpu_start];
                             continue;
                         }
                         int table_row = row - table_start;
