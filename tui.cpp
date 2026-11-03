@@ -631,7 +631,7 @@ int tui(top_t& top)
                 }
                 redraw                 = redraw || resized;
                 auto layout            = view_layout(terminal.width, terminal.height, static_cast<int>(snapshot.cpus.size()),
-                                                 state.filtered_pid != -1 && state.show_cpu);
+                                                     state.filtered_pid != -1 && state.show_cpu);
                 int  total_rows        = static_cast<int>(display_output.size()) - 1;
                 int  max_offset        = std::max(0, total_rows - layout.visible_rows);
                 state.scroll_offset    = std::clamp(state.scroll_offset, 0, max_offset);
@@ -709,7 +709,7 @@ int tui(top_t& top)
                             {
                                 next_sample = std::chrono::steady_clock::now();
                             }
-                            redraw         = true;
+                            redraw = true;
                         }
                         else if (table_y != -1)
                         {
@@ -761,7 +761,7 @@ int tui(top_t& top)
                     {
                         next_sample = std::chrono::steady_clock::now();
                     }
-                    redraw         = true;
+                    redraw = true;
                 }
                 else if (input.kind == terminal_event_kind_t::up || input.kind == terminal_event_kind_t::down ||
                          input.kind == terminal_event_kind_t::wheel_up || input.kind == terminal_event_kind_t::wheel_down)
