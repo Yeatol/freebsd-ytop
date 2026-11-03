@@ -192,6 +192,18 @@ static void test_selection()
           state.pressed_pid == -1 && state.pressed_tid == -1 && !state.toggle_on_release &&
           !state.show_cpu,
           "entering detail preserves process scroll and resets selection, mouse state and CPU view");
+    bool cpu_rows_dirty = false;
+    auto next_sample = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    check(toggle_cpu_view(state, cpu_rows_dirty, next_sample) && state.show_cpu &&
+          cpu_rows_dirty && next_sample <= std::chrono::steady_clock::now(),
+          "showing CPU view invalidates cached rows and triggers immediate sampling");
+    cpu_rows_dirty = false;
+    check(toggle_cpu_view(state, cpu_rows_dirty, next_sample) && !state.show_cpu &&
+          cpu_rows_dirty && next_sample <= std::chrono::steady_clock::now(),
+          "hiding CPU view invalidates cached rows without changing sample deadline");
+    view_state_t process_state;
+    check(!toggle_cpu_view(process_state, cpu_rows_dirty, next_sample),
+          "CPU view toggle is ignored outside thread detail mode");
     state.selected_pid = 10;
     state.selected_tid = 101;
     state.scroll_offset = 3;
@@ -278,7 +290,7 @@ static void cpu_fixture(std::vector<cpu_t>& cpus, int count)
 static void test_cpu()
 {
     auto normal = view_layout(120, 24, 8, false);
-    check(normal.cpu.rows == 0 && normal.cpu.table_start == 0 && normal.visible_rows == 23,
+    check(normal.cpu.rows == 0 && normal.visible_rows == 23,
           "process view uses full table height and no CPU grid");
     auto hidden_cpu = view_layout(120, 24, 8, false);
     check(hidden_cpu.cpu.rows == 0 && hidden_cpu.visible_rows == 23,
@@ -286,12 +298,9 @@ static void test_cpu()
     auto detail = view_layout(120, 24, 8, true);
     check(detail.cpu.width == 119 && detail.cpu.columns == 2 && detail.cpu.rows == 4 &&
           detail.cpu.column_width == 59 && detail.cpu.bar_cells == 54 &&
-          detail.cpu.first_row == 19 && detail.cpu.table_start == 0 && detail.visible_rows == 17,
+          detail.cpu.first_row == 19 && detail.visible_rows == 17,
           "thread view leaves a blank row above the CPU grid and below the screen");
-    for (int y = 0; y <= detail.cpu.table_start; ++y)
-    {
-        check(table_hit(detail, 5, 0, y) == -1, "table header is not selectable");
-    }
+    check(table_hit(detail, 5, 0, 0) == -1, "table header is not selectable");
     check(table_header_hit(detail, 0, 0) && table_header_hit(detail, 119, 0) &&
           !table_header_hit(detail, -1, 0) && !table_header_hit(detail, 120, 0) &&
           !table_header_hit(detail, 0, 1),
@@ -310,7 +319,7 @@ static void test_cpu()
             for (int width : {1, 2, 15, 80, 120})
             {
                 auto layout = view_layout(width, height, count, true);
-                check(layout.cpu.table_start == 0 && layout.visible_rows >= 0 &&
+                check(layout.visible_rows >= 0 &&
                       layout.cpu.rows + (layout.cpu.rows > 0 ? 2 : 0) <= height / 2 &&
                       (layout.cpu.rows == 0 ? layout.cpu.first_row == 0 :
                        layout.cpu.first_row + layout.cpu.rows == height - 1) &&

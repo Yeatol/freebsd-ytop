@@ -420,9 +420,8 @@ struct cpu_layout_t
     int columns;
     int column_width;
     int bar_cells;
-    int rows        = 0;
-    int first_row   = 0;
-    int table_start = 0;
+    int rows      = 0;
+    int first_row = 0;
 };
 
 static cpu_layout_t cpu_grid_layout(int width, int columns)
@@ -457,13 +456,15 @@ static view_layout_t view_layout(int width, int height, int cpu_count, bool show
 
 static int table_hit(const view_layout_t& layout, int visible_lines, int x, int y)
 {
-    int row = y - layout.cpu.table_start;
-    return x >= 0 && x < layout.width && y < layout.height && row > 0 && row < visible_lines ? row : -1;
+    return x >= 0 && x < layout.width && y >= 0 && y < layout.height &&
+                   y > 0 && y < visible_lines
+               ? y
+               : -1;
 }
 
 static bool table_header_hit(const view_layout_t& layout, int x, int y)
 {
-    return x >= 0 && x < layout.width && y == layout.cpu.table_start;
+    return x >= 0 && x < layout.width && y == 0;
 }
 
 static terminal_row_t cpu_grid_line(const std::vector<cpu_t>& cpus, int row, const cpu_layout_t& layout)
@@ -549,6 +550,21 @@ static int exit_detail_view(view_state_t& state)
     state.show_cpu      = false;
     clear_selection(state);
     return target_pid;
+}
+
+static bool toggle_cpu_view(view_state_t& state, bool& cpu_rows_dirty, std::chrono::steady_clock::time_point& next_sample)
+{
+    if (state.filtered_pid == -1)
+    {
+        return false;
+    }
+    state.show_cpu = !state.show_cpu;
+    cpu_rows_dirty = true;
+    if (state.show_cpu)
+    {
+        next_sample = std::chrono::steady_clock::now();
+    }
+    return true;
 }
 
 int tui(top_t& top)
@@ -657,7 +673,7 @@ int tui(top_t& top)
                             frame[row] = cpu_frame[row - layout.cpu.first_row];
                             continue;
                         }
-                        int table_row = row - layout.cpu.table_start;
+                        int table_row = row;
                         if (table_row < 0 || table_row >= visible_line_count)
                         {
                             frame[row].text.clear();
@@ -702,13 +718,10 @@ int tui(top_t& top)
                         clear_press(state);
                         if (state.filtered_pid != -1 && table_header_hit(layout, input.x, input.y))
                         {
-                            state.show_cpu = !state.show_cpu;
-                            cpu_rows_dirty = true;
-                            if (state.show_cpu)
+                            if (toggle_cpu_view(state, cpu_rows_dirty, next_sample))
                             {
-                                next_sample = std::chrono::steady_clock::now();
+                                redraw = true;
                             }
-                            redraw = true;
                         }
                         else if (table_y != -1)
                         {
@@ -751,16 +764,12 @@ int tui(top_t& top)
                 {
                     redraw = true;
                 }
-                else if (input.kind == terminal_event_kind_t::character && input.character == '\t' &&
-                         state.filtered_pid != -1)
+                else if (input.kind == terminal_event_kind_t::character && input.character == '\t')
                 {
-                    state.show_cpu = !state.show_cpu;
-                    cpu_rows_dirty = true;
-                    if (state.show_cpu)
+                    if (toggle_cpu_view(state, cpu_rows_dirty, next_sample))
                     {
-                        next_sample = std::chrono::steady_clock::now();
+                        redraw = true;
                     }
-                    redraw = true;
                 }
                 else if (input.kind == terminal_event_kind_t::up || input.kind == terminal_event_kind_t::down ||
                          input.kind == terminal_event_kind_t::wheel_up || input.kind == terminal_event_kind_t::wheel_down)
