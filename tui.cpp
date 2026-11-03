@@ -433,11 +433,10 @@ static cpu_layout_t cpu_grid_layout(int width, int columns)
 
 static cpu_layout_t cpu_layout(int count, int width, int height)
 {
-    int  columns       = cpu_columns(count, width, height);
-    auto layout        = cpu_grid_layout(width, columns);
-    layout.rows        = std::min((count + columns - 1) / columns, std::max(0, height / 2 - 2));
-    layout.first_row   = layout.rows > 0 ? 1 : 0;
-    layout.table_start = layout.rows > 0 ? layout.rows + 2 : 0;
+    int  columns     = cpu_columns(count, width, height);
+    auto layout      = cpu_grid_layout(width, columns);
+    layout.rows      = std::min((count + columns - 1) / columns, std::max(0, height / 2 - 2));
+    layout.first_row = layout.rows > 0 ? height - layout.rows - 1 : 0;
     return layout;
 }
 
@@ -451,8 +450,9 @@ struct view_layout_t
 
 static view_layout_t view_layout(int width, int height, int cpu_count, bool detail)
 {
-    auto cpu = cpu_layout(detail ? cpu_count : 0, std::max(0, width - 1), height);
-    return {width, height, cpu, std::max(0, height - cpu.table_start - 1)};
+    auto cpu          = cpu_layout(detail ? cpu_count : 0, std::max(0, width - 1), height);
+    int  visible_rows = cpu.rows > 0 ? std::max(0, cpu.first_row - 2) : std::max(0, height - 1);
+    return {width, height, cpu, visible_rows};
 }
 
 static int table_hit(const view_layout_t& layout, int visible_lines, int x, int y)
@@ -621,7 +621,8 @@ int tui(top_t& top)
                     break;
                 }
                 redraw                 = redraw || resized;
-                auto layout            = view_layout(terminal.width, terminal.height, static_cast<int>(snapshot.cpus.size()), state.filtered_pid != -1);
+                auto layout            = view_layout(terminal.width, terminal.height, static_cast<int>(snapshot.cpus.size()),
+                                                     state.filtered_pid != -1);
                 int  total_rows        = static_cast<int>(display_output.size()) - 1;
                 int  max_offset        = std::max(0, total_rows - layout.visible_rows);
                 state.scroll_offset    = std::clamp(state.scroll_offset, 0, max_offset);

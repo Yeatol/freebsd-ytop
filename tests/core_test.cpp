@@ -279,15 +279,16 @@ static void test_cpu()
     auto detail = view_layout(120, 24, 8, true);
     check(detail.cpu.width == 119 && detail.cpu.columns == 2 && detail.cpu.rows == 4 &&
           detail.cpu.column_width == 59 && detail.cpu.bar_cells == 54 &&
-          detail.cpu.first_row == 1 && detail.cpu.table_start == 6 && detail.visible_rows == 17,
-          "thread view shares CPU geometry, blank rows and table offset");
+          detail.cpu.first_row == 19 && detail.cpu.table_start == 0 && detail.visible_rows == 17,
+          "thread view leaves a blank row above the CPU grid and below the screen");
     for (int y = 0; y <= detail.cpu.table_start; ++y)
     {
-        check(table_hit(detail, 5, 0, y) == -1, "CPU region, blank lines and table header are not selectable");
+        check(table_hit(detail, 5, 0, y) == -1, "table header is not selectable");
     }
-    check(table_hit(detail, 5, 0, 7) == 1 && table_hit(detail, 5, 119, 10) == 4 &&
-          table_hit(detail, 5, 0, 11) == -1 && table_hit(detail, 5, -1, 7) == -1 &&
-          table_hit(detail, 5, 120, 7) == -1 && table_hit(detail, 100, 0, 24) == -1,
+    check(table_hit(detail, 5, 0, 1) == 1 && table_hit(detail, 5, 119, 4) == 4 &&
+          table_hit(detail, 5, 0, 5) == -1 && table_hit(detail, 5, 0, 20) == -1 &&
+          table_hit(detail, 5, -1, 1) == -1 && table_hit(detail, 5, 120, 1) == -1 &&
+          table_hit(detail, 100, 0, 24) == -1,
           "mouse hit testing maps only visible table rows and valid screen coordinates");
     check(table_hit(normal, 5, 0, 1) == 1 && table_hit(normal, 5, 0, 0) == -1,
           "process view mouse rows have no CPU offset");
@@ -298,23 +299,25 @@ static void test_cpu()
             for (int width : {1, 2, 15, 80, 120})
             {
                 auto layout = view_layout(width, height, count, true);
-                check(layout.cpu.table_start <= height / 2 && layout.visible_rows >= 0 &&
-                      layout.cpu.rows + (layout.cpu.rows > 0 ? 2 : 0) == layout.cpu.table_start &&
+                check(layout.cpu.table_start == 0 && layout.visible_rows >= 0 &&
+                      layout.cpu.rows + (layout.cpu.rows > 0 ? 2 : 0) <= height / 2 &&
+                      (layout.cpu.rows == 0 ? layout.cpu.first_row == 0 :
+                       layout.cpu.first_row + layout.cpu.rows == height - 1) &&
                       layout.cpu.column_width * layout.cpu.columns <= layout.cpu.width,
-                      "unified layout preserves half-height, margins and nonnegative dimensions");
+                      "bottom CPU grid preserves its bottom margin, table space and dimensions");
             }
         }
     }
     std::vector<cpu_t> simulated;
-    check(cpu_layout(12, 120, 80).table_start == 6 && cpu_layout(12, 80, 24).table_start == 8,
-          "CPU prefix reserves top and bottom blank lines");
-    check(cpu_layout(12, 120, 5).table_start == 0 && cpu_layout(12, 120, 4).table_start == 0 &&
-          cpu_layout(0, 120, 80).table_start == 0, "short terminal preserves table header and data");
-    check(cpu_columns(24, 120, 16) == 4 && cpu_layout(24, 120, 16).table_start == 8,
-          "CPU layout adds columns to fit half the screen without gaps");
-    check(cpu_columns(12, 120, 8) == 6 && cpu_layout(12, 120, 8).table_start == 4,
+    check(cpu_layout(12, 120, 80).first_row == 75 && cpu_layout(12, 80, 24).first_row == 17,
+          "CPU grid leaves one blank row at the bottom of the screen");
+    check(cpu_layout(12, 120, 5).rows == 0 && cpu_layout(12, 120, 4).rows == 0 &&
+          cpu_layout(0, 120, 80).rows == 0, "short terminal preserves table header and data");
+    check(cpu_columns(24, 120, 16) == 4 && cpu_layout(24, 120, 16).first_row == 9,
+          "CPU layout adds columns to fit half the screen with bottom spacing");
+    check(cpu_columns(12, 120, 8) == 6 && cpu_layout(12, 120, 8).first_row == 5,
           "short CPU area expands columns before clipping");
-    check(cpu_columns(128, 120, 24) == 16 && cpu_layout(128, 120, 24).table_start == 10,
+    check(cpu_columns(128, 120, 24) == 16 && cpu_layout(128, 120, 24).first_row == 15,
           "dense CPU layout fits all cores within half the screen");
     cpu_fixture(simulated, 128);
     auto dense = cpu_grid_line(simulated, 7, cpu_layout(128, 120, 24));
@@ -326,14 +329,15 @@ static void test_cpu()
     int max_columns = cpu_columns(256, 120, 40);
     auto max_grid = cpu_grid_line(simulated, 15, cpu_layout(256, 120, 40));
     check(max_columns == 16 && max_grid.text.find("255[") != std::string::npos &&
-          max_grid.text.size() <= 120 && cpu_layout(256, 120, 40).table_start <= 20,
+          max_grid.text.size() <= 120 && cpu_layout(256, 120, 40).first_row == 23,
           "256 CPUs retain three-character IDs and equal-width compact bars");
     for (int height = 1; height <= 81; ++height)
     {
         for (int width : {2, 15, 80, 120})
         {
-            check(cpu_layout(128, width, height).table_start <= height / 2,
-                  "CPU area including blank lines never exceeds half the screen");
+            auto layout = cpu_layout(128, width, height);
+            check(layout.rows + (layout.rows > 0 ? 2 : 0) <= height / 2,
+                  "CPU grid and separator never exceed half the screen");
         }
     }
     cpu_t bar_cpu;
@@ -436,7 +440,7 @@ static void test_cpu()
         check(padded.text.size() <= static_cast<size_t>(screen_width - 1),
               "CPU grid reserves at least one blank cell at screen right");
     }
-    check(cpu_layout(8, 120, 80).table_start == 6 && grid.text.starts_with("  3[") &&
+    check(cpu_layout(8, 120, 80).first_row == 75 && grid.text.starts_with("  3[") &&
           grid.text.substr(60, 4) == "  7[",
           "eight CPUs form four rows and two columns ordered vertically");
     cpu_fixture(cpus, 12);

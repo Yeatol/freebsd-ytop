@@ -94,7 +94,7 @@ usernames, and wait-channel text with `?` before they reach the renderer.
 ## Display
 
 There is no right-side CPU bar.
-Thread detail mode shows logical CPU bars above the table in a responsive grid,
+Thread detail mode shows logical CPU bars near the bottom of the screen in a responsive grid,
 as `  0[||||||||||]`, without a space before `[`. CPU IDs are right-aligned in a fixed width of three;
 the layout targets up to 256 logical CPUs (IDs 0 through 255),
 without a `CPU` prefix. The grid uses at least two columns when there are two
@@ -119,9 +119,9 @@ red system time, and yellow interrupts; idle capacity uses gray `|` characters.
 CPU IDs and brackets use ANSI bright black (gray). Cumulative
 segment boundaries are rounded to the nearest cell. These are whole-CPU
 measurements, not usage attributable only to the selected process.
-A blank line precedes the CPU grid, and another separates it from the table.
-The CPU area, including both blank lines, never exceeds half the terminal height
-(rounded down). Columns increase when necessary, preferring divisors of the
+A blank line separates the table from the CPU grid below it. The CPU grid and
+its separator never exceed half the terminal height (rounded down). Columns
+increase when necessary, preferring divisors of the
 CPU count, even if this makes bars narrower. Showing all CPUs takes priority over
 avoiding empty slots. Dense layouts shorten bars,
 reducing each CPU to its three-character ID, brackets and at least one bar cell.
@@ -129,13 +129,13 @@ If even this minimum cannot fit, excess rows are clipped; enlarge the terminal
 to see all CPUs. Terminals shorter than six rows hide the grid.
 Clicking CPU rows or the table header does not select
 a thread. The process list never shows CPU bars.
-The table header stays fixed below the CPU bars (on the first line when no CPU
-grid is displayed).
-All rows below the header are available for processes and threads.
+The CPU grid leaves one blank terminal row below it. The table header stays fixed
+at the top. Process and thread rows scroll in the space between the header and
+the bottom CPU grid.
 The table uses the full terminal width.
 Load averages, process summaries, and keyboard hints are not shown.
 Header fields use the terminal's default text color; the selected row uses ANSI
-blue in the process list and ANSI green in the thread list. Table backgrounds remain unchanged.
+blue in both process and thread lists. Table backgrounds remain unchanged.
 Colors use the terminal's 16-color palette, so their appearance depends on its
 theme. Header and selection highlighting do not use reverse video.
 Foreground changes fully reset rendition before applying the color and any
