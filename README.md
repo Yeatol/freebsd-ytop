@@ -49,7 +49,8 @@ the terminal.
 | --- | --- |
 | `Up` / `Down` | Move the selection by one displayed row, including thread rows. Selection does not wrap; the list scrolls to keep it visible. With no selection, `Down` selects the first visible row and `Up` selects the last visible row. |
 | `Space` | Enter detail mode for the selected process, showing all its threads and clearing the selection. In detail mode, exit even with no selection. Exiting restores the process-only list and selects the target process, keeping it visible; if it has disappeared, selection stays cleared. Does nothing in the normal list with no selection. |
-| Left-click | Select a process or thread. In the normal list, clicking the already selected process enters detail mode. In detail mode, clicks only select rows and never collapse threads or exit the mode. Clicking the status bar, header, or blank space does not change the selection. |
+| `Tab` | In thread detail mode, show or hide the CPU grid. It is hidden by default. |
+| Left-click | Select a process or thread. In the normal list, clicking the already selected process enters detail mode. In detail mode, clicking the table header toggles the CPU grid; clicks on rows only select them and never collapse threads or exit the mode. Clicking the status bar or blank space does not change the selection. |
 | Mouse wheel | With a selection, move it one displayed row per wheel step, like `Up` / `Down`, including thread rows; the list scrolls to keep it visible, without wrapping. With no selection, scroll the list three displayed rows per wheel step without selecting a row. |
 | `Esc` / Right-click | Clear an existing selection without changing the view or scroll position. With no selection in detail mode, return to the process list and select the target process as with `Space`. With no selection in the normal list, do nothing. |
 | `q` / `Ctrl+C` | Quit and restore the terminal from either mode. |
@@ -94,7 +95,7 @@ usernames, and wait-channel text with `?` before they reach the renderer.
 ## Display
 
 There is no right-side CPU bar.
-Thread detail mode shows logical CPU bars near the bottom of the screen in a responsive grid,
+Thread detail mode can show logical CPU bars near the bottom of the screen in a responsive grid,
 as `  0[||||||||||]`, without a space before `[`. CPU IDs are right-aligned in a fixed width of three;
 the layout targets up to 256 logical CPUs (IDs 0 through 255),
 without a `CPU` prefix. The grid uses at least two columns when there are two
@@ -129,9 +130,10 @@ If even this minimum cannot fit, excess rows are clipped; enlarge the terminal
 to see all CPUs. Terminals shorter than six rows hide the grid.
 Clicking CPU rows or the table header does not select
 a thread. The process list never shows CPU bars.
-The CPU grid leaves one blank terminal row below it. The table header stays fixed
-at the top. Process and thread rows scroll in the space between the header and
-the bottom CPU grid.
+The CPU grid is hidden by default and can be toggled with `Tab`. When shown, it
+leaves one blank terminal row below it. The table header stays fixed at the top.
+Process and thread rows scroll in the space between the header and the bottom
+CPU grid; when hidden, the thread table uses the full height.
 The table uses the full terminal width.
 Load averages, process summaries, and keyboard hints are not shown.
 Header fields use the terminal's default text color; the selected row uses ANSI
@@ -193,7 +195,7 @@ rows can be selected without toggling the parent. The PID column is not shown
 in detail mode. There is no separate thread expansion or collapse.
 The detail-mode PID persists across refreshes and selection changes until
 `Space`, or `Esc` / right-click with no selection, returns to the normal list.
-`Tab` is ignored.
+The CPU grid is hidden on entering detail mode and can be toggled with `Tab`.
 
 Detail-mode thread rows show per-thread state, runtime, CPU usage, and thread names.
 `THREAD` shows the thread name directly, falling back to the process name
@@ -289,8 +291,9 @@ from `CPU`.
 ### System CPU sampling
 
 `top_sample` accepts an optional detail PID (`-1` for the process list) and
-collects whole-system and per-CPU data. These system CPU summaries are retained
-in the sampling API; per-CPU data is displayed above the thread table.
+collects whole-system and per-CPU data when requested. The TUI requests CPU
+sampling only while the thread-detail CPU grid is visible; otherwise it samples
+processes and threads without reading CPU counters.
 Like FreeBSD `top`, it sizes the per-CPU buffer using
 `kern.smp.maxcpus`, reads `kern.cp_times`, and omits CPU slots whose counters
 are all zero. `snapshot.cpus` retains the actual CPU IDs in ascending order,

@@ -178,17 +178,20 @@ static void test_layout()
 static void test_selection()
 {
     view_state_t state;
-    check(!enter_detail_view(state), "entering detail without selection changes nothing");
+    check(!state.show_cpu && !enter_detail_view(state),
+          "CPU grid is hidden initially and entering detail without selection changes nothing");
     state.selected_pid = 10;
     state.scroll_offset = 7;
+    state.show_cpu = true;
     state.pressed_pid = 10;
     state.pressed_tid = 100;
     state.toggle_on_release = true;
     check(enter_detail_view(state) && state.filtered_pid == 10 &&
           state.scroll_before_filter == 7 && state.scroll_offset == 0 &&
           state.selected_pid == -1 && state.selected_tid == -1 &&
-          state.pressed_pid == -1 && state.pressed_tid == -1 && !state.toggle_on_release,
-          "entering detail preserves process scroll and resets selection and mouse state");
+          state.pressed_pid == -1 && state.pressed_tid == -1 && !state.toggle_on_release &&
+          !state.show_cpu,
+          "entering detail preserves process scroll and resets selection, mouse state and CPU view");
     state.selected_pid = 10;
     state.selected_tid = 101;
     state.scroll_offset = 3;
@@ -202,9 +205,10 @@ static void test_selection()
     clear_selection(state);
     check(state.filtered_pid == 10 && state.scroll_offset == 3 && state.selected_pid == -1,
           "clearing selection does not exit detail or reset scrolling");
+    state.show_cpu = true;
     check(exit_detail_view(state) == 10 && state.filtered_pid == -1 &&
-          state.scroll_offset == 7 && state.selected_pid == -1,
-          "exiting detail returns target PID and restores process scrolling");
+          state.scroll_offset == 7 && state.selected_pid == -1 && !state.show_cpu,
+          "exiting detail returns target PID and restores process scrolling and default CPU view");
     state.selected_pid = 10;
     check(row_selected(process_row, state) && !row_selected(thread_row, state),
           "process selection does not select its threads");
@@ -276,6 +280,9 @@ static void test_cpu()
     auto normal = view_layout(120, 24, 8, false);
     check(normal.cpu.rows == 0 && normal.cpu.table_start == 0 && normal.visible_rows == 23,
           "process view uses full table height and no CPU grid");
+    auto hidden_cpu = view_layout(120, 24, 8, false);
+    check(hidden_cpu.cpu.rows == 0 && hidden_cpu.visible_rows == 23,
+          "hidden CPU grid leaves the full terminal height for the thread table");
     auto detail = view_layout(120, 24, 8, true);
     check(detail.cpu.width == 119 && detail.cpu.columns == 2 && detail.cpu.rows == 4 &&
           detail.cpu.column_width == 59 && detail.cpu.bar_cells == 54 &&
@@ -285,6 +292,10 @@ static void test_cpu()
     {
         check(table_hit(detail, 5, 0, y) == -1, "table header is not selectable");
     }
+    check(table_header_hit(detail, 0, 0) && table_header_hit(detail, 119, 0) &&
+          !table_header_hit(detail, -1, 0) && !table_header_hit(detail, 120, 0) &&
+          !table_header_hit(detail, 0, 1),
+          "thread table header hit testing accepts only valid header coordinates");
     check(table_hit(detail, 5, 0, 1) == 1 && table_hit(detail, 5, 119, 4) == 4 &&
           table_hit(detail, 5, 0, 5) == -1 && table_hit(detail, 5, 0, 20) == -1 &&
           table_hit(detail, 5, -1, 1) == -1 && table_hit(detail, 5, 120, 1) == -1 &&
@@ -542,6 +553,14 @@ static void test_live_sampling()
     auto process_count = snapshot.processes.size();
     int max_cpus = top.max_cpus;
     top.max_cpus = 0;
+    auto previous_cpu_ticks = top.previous_cpu_ticks;
+    auto previous_per_cpu_ticks = top.previous_per_cpu_ticks;
+    check(top_sample(top, snapshot, error, getpid(), false), error);
+    check(snapshot.cpus.empty() && snapshot.cpu.ticks == std::array<long, CPUSTATES>{} &&
+          top.previous_cpu_ticks == previous_cpu_ticks &&
+          top.previous_per_cpu_ticks == previous_per_cpu_ticks,
+          "disabled CPU sampling skips CPU data and preserves sampling baselines");
+    previous_time = top.sampled_at;
     check(!top_sample(top, snapshot, error, getpid()) && !error.empty(), "malformed CPU buffer fails explicitly");
     check(top.sampled_at == previous_time && snapshot.processes.size() == process_count, "failed sample preserves committed state");
     top.max_cpus = max_cpus;

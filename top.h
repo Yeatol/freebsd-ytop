@@ -109,4 +109,4 @@ bool top_open(top_t& top, std::string& error);
 
 void top_close(top_t& top);
 
-bool top_sample(top_t& top, snapshot_t& snapshot, std::string& error, int detail_pid = -1);
+bool top_sample(top_t& top, snapshot_t& snapshot, std::string& error, int detail_pid = -1, bool sample_cpu = true);

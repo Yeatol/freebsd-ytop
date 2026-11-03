@@ -448,9 +448,9 @@ struct view_layout_t
     int          visible_rows;
 };
 
-static view_layout_t view_layout(int width, int height, int cpu_count, bool detail)
+static view_layout_t view_layout(int width, int height, int cpu_count, bool show_cpu)
 {
-    auto cpu          = cpu_layout(detail ? cpu_count : 0, std::max(0, width - 1), height);
+    auto cpu          = cpu_layout(show_cpu ? cpu_count : 0, std::max(0, width - 1), height);
     int  visible_rows = cpu.rows > 0 ? std::max(0, cpu.first_row - 2) : std::max(0, height - 1);
     return {width, height, cpu, visible_rows};
 }
@@ -459,6 +459,11 @@ static int table_hit(const view_layout_t& layout, int visible_lines, int x, int 
 {
     int row = y - layout.cpu.table_start;
     return x >= 0 && x < layout.width && y < layout.height && row > 0 && row < visible_lines ? row : -1;
+}
+
+static bool table_header_hit(const view_layout_t& layout, int x, int y)
+{
+    return x >= 0 && x < layout.width && y == layout.cpu.table_start;
 }
 
 static terminal_row_t cpu_grid_line(const std::vector<cpu_t>& cpus, int row, const cpu_layout_t& layout)
@@ -500,6 +505,7 @@ struct view_state_t
     int     pressed_pid          = -1;
     lwpid_t pressed_tid          = -1;
     bool    toggle_on_release    = false;
+    bool    show_cpu             = false;
 };
 
 static void clear_press(view_state_t& state)
@@ -530,6 +536,7 @@ static bool enter_detail_view(view_state_t& state)
     state.scroll_before_filter = state.scroll_offset;
     state.scroll_offset        = 0;
     state.filtered_pid         = state.selected_pid;
+    state.show_cpu             = false;
     clear_selection(state);
     return true;
 }
@@ -539,6 +546,7 @@ static int exit_detail_view(view_state_t& state)
     int target_pid      = state.filtered_pid;
     state.filtered_pid  = -1;
     state.scroll_offset = state.scroll_before_filter;
+    state.show_cpu      = false;
     clear_selection(state);
     return target_pid;
 }
@@ -565,7 +573,8 @@ int tui(top_t& top)
             std::vector<terminal_row_t> frame;
             std::vector<terminal_row_t> cpu_frame;
             auto                        refresh = [&] {
-                if (!top_sample(top, snapshot, error, state.filtered_pid))
+                if (!top_sample(top, snapshot, error, state.filtered_pid,
+                                state.filtered_pid != -1 && state.show_cpu))
                 {
                     status = 1;
                     return false;
@@ -622,7 +631,7 @@ int tui(top_t& top)
                 }
                 redraw                 = redraw || resized;
                 auto layout            = view_layout(terminal.width, terminal.height, static_cast<int>(snapshot.cpus.size()),
-                                                     state.filtered_pid != -1);
+                                                 state.filtered_pid != -1 && state.show_cpu);
                 int  total_rows        = static_cast<int>(display_output.size()) - 1;
                 int  max_offset        = std::max(0, total_rows - layout.visible_rows);
                 state.scroll_offset    = std::clamp(state.scroll_offset, 0, max_offset);
@@ -692,7 +701,17 @@ int tui(top_t& top)
                     if (input.kind == terminal_event_kind_t::mouse_press)
                     {
                         clear_press(state);
-                        if (table_y != -1)
+                        if (state.filtered_pid != -1 && table_header_hit(layout, input.x, input.y))
+                        {
+                            state.show_cpu = !state.show_cpu;
+                            cpu_rows_dirty = true;
+                            if (state.show_cpu)
+                            {
+                                next_sample = std::chrono::steady_clock::now();
+                            }
+                            redraw         = true;
+                        }
+                        else if (table_y != -1)
                         {
                             const auto& pressed_row  = display_output[table_y + state.scroll_offset];
                             bool        was_selected = row_selected(pressed_row, state);
@@ -732,6 +751,17 @@ int tui(top_t& top)
                 else if (input.kind == terminal_event_kind_t::redraw)
                 {
                     redraw = true;
+                }
+                else if (input.kind == terminal_event_kind_t::character && input.character == '\t' &&
+                         state.filtered_pid != -1)
+                {
+                    state.show_cpu = !state.show_cpu;
+                    cpu_rows_dirty = true;
+                    if (state.show_cpu)
+                    {
+                        next_sample = std::chrono::steady_clock::now();
+                    }
+                    redraw         = true;
                 }
                 else if (input.kind == terminal_event_kind_t::up || input.kind == terminal_event_kind_t::down ||
                          input.kind == terminal_event_kind_t::wheel_up || input.kind == terminal_event_kind_t::wheel_down)
