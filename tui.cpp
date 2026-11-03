@@ -204,7 +204,6 @@ static std::vector<display_row_t> lines(const snapshot_t& snapshot, int detail_p
             if (process.pid == detail_pid)
             {
                 kernel_process = process.kernel_process;
-                affinity_width = std::max(affinity_width, process.affinity.size());
             }
         }
         for (const auto& thread : snapshot.threads)
@@ -279,15 +278,13 @@ static std::vector<display_row_t> lines(const snapshot_t& snapshot, int detail_p
             continue;
         }
 
-        auto             thread_begin   = std::ranges::lower_bound(snapshot.threads, p.pid, {}, &process_t::pid);
-        auto             thread_end     = std::ranges::upper_bound(snapshot.threads, p.pid, {}, &process_t::pid);
-        const process_t* command_source = &p;
-        auto             representative = std::ranges::find_if(thread_begin, thread_end, [&](const process_t& thread) { return thread.tid == p.tid; });
+        auto thread_begin   = std::ranges::lower_bound(snapshot.threads, p.pid, {}, &process_t::pid);
+        auto thread_end     = std::ranges::upper_bound(snapshot.threads, p.pid, {}, &process_t::pid);
+        auto representative = std::ranges::find_if(thread_begin, thread_end, [&](const process_t& thread) { return thread.tid == p.tid; });
         if (representative != thread_end)
         {
-            command_source = &*representative;
+            append(*representative, true, *representative);
         }
-        append(p, false, *command_source);
         for (auto thread = thread_begin; thread != thread_end; ++thread)
         {
             if (thread->tid != p.tid)

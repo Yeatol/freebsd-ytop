@@ -43,6 +43,25 @@ static void test_layout()
     snapshot.processes = {record(10, 100), record(20, 200, true)};
     snapshot.threads = {record(10, 100), record(10, 101), record(20, 200, true), record(20, 201, true)};
     snapshot.threads[0].command = "representative";
+    snapshot.processes[0].runtime_us = 123000000;
+    snapshot.threads[0].runtime_us = 23000000;
+    snapshot.threads[1].runtime_us = 100000000;
+    snapshot.processes[1].runtime_us = 45000000;
+    snapshot.threads[2].runtime_us = 5000000;
+    snapshot.processes[0].user_cpu_percent = 80.0;
+    snapshot.processes[0].kernel_cpu_percent = 40.0;
+    snapshot.processes[0].priority = 10;
+    snapshot.processes[0].state = "SLEEP";
+    snapshot.processes[0].cpu = 7;
+    snapshot.processes[0].nivcsw = 99;
+    snapshot.processes[0].nvcsw = 999;
+    snapshot.processes[0].affinity = "0,1,2,3";
+    snapshot.processes[1].cpu_percent = 150.0;
+    snapshot.processes[1].priority = 20;
+    snapshot.processes[1].state = "STOP";
+    snapshot.processes[1].cpu = 8;
+    snapshot.processes[1].nivcsw = 88;
+    snapshot.threads[2].cpu_percent = 5.0;
     snapshot.threads[1].command = "worker";
     snapshot.threads[1].nivcsw = 12;
     snapshot.threads[1].nvcsw = 345;
@@ -94,6 +113,17 @@ static void test_layout()
           wide_user_rows[2].text.substr(wide_domain, 4) == "   u",
           "columns after username remain aligned when a username is long");
     auto detail = lines(snapshot, 10);
+    size_t time_column = detail[0].text.find("TIME") - 2;
+    size_t process_time_column = normal[0].text.find("TIME") - 2;
+    check(normal[1].text.substr(process_time_column, 6) == "  2:03",
+          "process list retains accumulated process CPU time");
+    check(detail[1].text.substr(time_column, 6) == "  0:23" &&
+          detail[2].text.substr(time_column, 6) == "  1:40",
+          "detail TIME uses each thread's runtime including the representative");
+    check(detail[1].record == &snapshot.threads[0] && detail[1].thread &&
+          detail[1].threads == 1 &&
+          detail[1].text == process_line(snapshot.threads[0], true, snapshot.threads[0], true),
+          "first user detail row uses only thread data for every field");
     auto deferred = lines(snapshot, 10, false);
     check(deferred.size() == detail.size() && deferred[0].text == detail[0].text,
           "deferred layout preserves header and row count");
@@ -109,7 +139,7 @@ static void test_layout()
           detail[0].text.find("PRI") != std::string::npos && detail[0].text.find("NICE") == std::string::npos,
           "user detail shows split CPU columns without total CPU");
     check(detail.size() == 3 && detail[1].tid == 100 && detail[2].tid == 101, "representative TID is not duplicated");
-    check(!detail[1].thread && detail[2].thread, "parent and thread selection identities");
+    check(detail[1].thread && detail[2].thread, "all detail rows use thread selection identities");
     size_t affinity = detail[0].text.find("  A ");
     check(affinity != std::string::npos, "affinity header has minimum width three");
     size_t cpu = detail[0].text.find("  C ", affinity);
@@ -157,6 +187,11 @@ static void test_layout()
     check(detail[1].text.substr(affinity, 8) == "      - " &&
           detail[2].text.substr(affinity, 8) == "0,2,3,7 ", "long affinity masks keep all rows aligned");
     auto kernel = lines(snapshot, 20);
+    check(kernel[1].record == &snapshot.threads[2] && kernel[1].thread &&
+          kernel[1].text == process_line(snapshot.threads[2], true, snapshot.threads[2], true),
+          "first kernel detail row uses thread CPU, state, priority and counters");
+    check(kernel[1].text.substr(time_column, 6) == "  0:05",
+          "kernel detail TIME uses representative thread runtime");
     check(kernel[0].text.find(" KCPU ") != std::string::npos &&
           kernel[0].text.find(" CPU ") == std::string::npos,
           "kernel detail labels kernel CPU as KCPU");
@@ -168,8 +203,18 @@ static void test_layout()
     check(lines(snapshot, 99).size() == 1, "disappeared process leaves only header");
     snapshot.threads.erase(snapshot.threads.begin());
     detail = lines(snapshot, 10);
-    check(detail.size() == 3 && detail[1].text.ends_with("process"),
-          "missing representative falls back to process name");
+    check(detail.size() == 2 && detail[1].tid == 101 && detail[1].thread &&
+          detail[1].record == &snapshot.threads[0],
+          "missing representative is omitted without substituting a process row");
+    snapshot_t single_thread;
+    single_thread.processes = {record(30, 300)};
+    single_thread.threads = {record(30, 300)};
+    single_thread.processes[0].user_cpu_percent = 90.0;
+    check(lines(single_thread, 30)[1].text ==
+          process_line(single_thread.threads[0], true, single_thread.threads[0], true),
+          "single-thread process detail also uses the thread record");
+    single_thread.threads.clear();
+    check(lines(single_thread, 30).size() == 1, "missing thread sample leaves only the header");
     check(memory(1023) == "1023K" && memory(1024) == "1M" &&
           memory(9999) == "10M" && memory(10240) == "10M", "memory unit boundary");
     check(runtime(59500000) == "1:00" && runtime(6000000000) == "1h", "runtime rounding and hour format");
@@ -236,9 +281,9 @@ static void test_selection()
     lwpid_t tid = -1;
     int scroll = 0;
     move_selection(rows, 1, 3, pid, tid, scroll);
-    check(pid == 10 && tid == -1 && scroll == 0, "down without selection picks first visible row");
+    check(pid == 10 && tid == 100 && scroll == 0, "down without selection picks first visible thread");
     move_selection(rows, -1, 3, pid, tid, scroll);
-    check(tid == -1, "selection does not wrap at top");
+    check(tid == 100, "selection does not wrap at top");
     for (int i = 0; i < 20; ++i)
     {
         move_selection(rows, 1, 3, pid, tid, scroll);
