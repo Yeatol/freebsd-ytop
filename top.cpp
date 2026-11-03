@@ -277,14 +277,14 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int d
 
         double                cpu_fraction   = static_cast<double>(p.ki_pctcpu) / top.fscale;
         auto                  user_time_us   = microseconds(p.ki_rusage.ru_utime);
-        auto                  system_time_us = microseconds(p.ki_rusage.ru_stime);
+        auto                  kernel_time_us = microseconds(p.ki_rusage.ru_stime);
         std::optional<double> user_cpu;
-        std::optional<double> system_cpu;
+        std::optional<double> kernel_cpu;
         bool                  kernel_process = (p.ki_flag & P_KPROC) != 0;
         if (sampled_at == std::chrono::steady_clock::time_point{})
         {
             user_cpu   = 0.0;
-            system_cpu = 0.0;
+            kernel_cpu = 0.0;
         }
         int                   record_id       = threads ? p.ki_tid : p.ki_pid;
         auto                  previous_record = previous.find(record_id);
@@ -304,10 +304,10 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int d
             if (same_process)
             {
                 cpu_fraction = static_cast<double>(p.ki_runtime - previous_record->second.runtime_us) / sample_interval_us;
-                if (!kernel_process && user_time_us >= previous_record->second.user_us && system_time_us >= previous_record->second.system_us)
+                if (!kernel_process && user_time_us >= previous_record->second.user_us && kernel_time_us >= previous_record->second.kernel_us)
                 {
                     user_cpu   = static_cast<double>(user_time_us - previous_record->second.user_us) / sample_interval_us * 100;
-                    system_cpu = static_cast<double>(system_time_us - previous_record->second.system_us) / sample_interval_us * 100;
+                    kernel_cpu = static_cast<double>(kernel_time_us - previous_record->second.kernel_us) / sample_interval_us * 100;
                 }
             }
             else if (!same_process)
@@ -316,11 +316,11 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int d
                 if (!kernel_process)
                 {
                     user_cpu   = static_cast<double>(user_time_us) / sample_interval_us * 100;
-                    system_cpu = static_cast<double>(system_time_us) / sample_interval_us * 100;
+                    kernel_cpu = static_cast<double>(kernel_time_us) / sample_interval_us * 100;
                 }
             }
         }
-        history.emplace(record_id, previous_process_t{p.ki_runtime, user_time_us, system_time_us, nvcsw, nivcsw});
+        history.emplace(record_id, previous_process_t{p.ki_runtime, user_time_us, kernel_time_us, nvcsw, nivcsw});
         if (threads)
         {
             cpu_fraction = std::min(cpu_fraction, 1.0);
@@ -328,7 +328,7 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int d
         if (kernel_process)
         {
             user_cpu.reset();
-            system_cpu = cpu_fraction * 100;
+            kernel_cpu = cpu_fraction * 100;
         }
 
         std::string username;
@@ -384,7 +384,7 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int d
             .nvcsw_per_second   = nvcsw_per_second,
             .nivcsw_per_second  = nivcsw_per_second,
             .user_cpu_percent   = user_cpu,
-            .system_cpu_percent = system_cpu,
+            .kernel_cpu_percent = kernel_cpu,
             .command            = command,
             .affinity           = affinity});
     }

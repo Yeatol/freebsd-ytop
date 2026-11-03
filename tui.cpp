@@ -43,7 +43,7 @@ static std::string memory(uint64_t kb)
 {
     constexpr const char* units[] = {"K", "M", "G", "T", "P"};
     size_t                unit    = 0;
-    while (kb >= 10000 && unit + 1 < std::size(units))
+    while (kb >= 1024 && unit + 1 < std::size(units))
     {
         kb = (kb + 512) / 1024;
         ++unit;
@@ -71,6 +71,7 @@ struct display_row_t
     const process_t* record         = nullptr;
     const process_t* command_source = nullptr;
     size_t           affinity_width = 3;
+    size_t           username_width = 4;
 };
 
 static std::string switch_number(long double value)
@@ -113,7 +114,7 @@ static std::array<std::string, 2> switch_values(const process_t& p)
             switch_value(p.nvcsw, p.nvcsw_per_second)};
 }
 
-static std::string process_line(const process_t& p, bool thread, const process_t& command_source, bool show_context_switches = false, size_t affinity_width = 3)
+static std::string process_line(const process_t& p, bool thread, const process_t& command_source, bool show_context_switches = false, size_t affinity_width = 3, size_t username_width = 4)
 {
     std::string cpu = p.cpu < 0 ? "-" : std::to_string(p.cpu);
     std::string row;
@@ -124,26 +125,19 @@ static std::string process_line(const process_t& p, bool thread, const process_t
     }
     else
     {
-        std::format_to(std::back_inserter(row), "{:>5} {:<10} {:>4} ", p.pid,
-                       std::string_view(p.username).substr(0, 10), p.threads);
+        std::format_to(std::back_inserter(row), "{:>5} {:<{}} ", p.pid, p.username, username_width);
     }
-    std::format_to(std::back_inserter(row), "{:>3} {:>4} ", p.priority, p.nice);
-    if (!thread && !show_context_switches)
+    if (show_context_switches)
     {
-        std::format_to(std::back_inserter(row), "{:>7} {:>6} ", memory(p.size_kb), memory(p.resident_kb));
-    }
-    if (!thread && !show_context_switches)
-    {
-        std::format_to(std::back_inserter(row), "{:<6} {:>3} ", std::string_view(p.state).substr(0, 6), cpu);
+        std::format_to(std::back_inserter(row), "{:>3} ", p.priority);
     }
     else
     {
-        std::format_to(std::back_inserter(row), "{:<6} ", std::string_view(p.state).substr(0, 6));
-        const auto values = switch_values(command_source);
-        for (size_t i = 0; i < values.size(); ++i)
-        {
-            std::format_to(std::back_inserter(row), "{:<9} ", values[i]);
-        }
+        std::format_to(std::back_inserter(row), "{:>5} ", p.nice);
+    }
+    if (!thread && !show_context_switches)
+    {
+        std::format_to(std::back_inserter(row), "{:>5} {:>5} ", memory(p.size_kb), memory(p.resident_kb));
     }
     std::format_to(std::back_inserter(row), "{:>6} ", runtime(p.runtime_us));
     if ((!thread && !show_context_switches) || p.kernel_process)
@@ -154,7 +148,7 @@ static std::string process_line(const process_t& p, bool thread, const process_t
     {
         if (!p.kernel_process)
         {
-            for (const auto& percent : {p.user_cpu_percent, p.system_cpu_percent})
+            for (const auto& percent : {p.user_cpu_percent, p.kernel_cpu_percent})
             {
                 if (percent.has_value())
                 {
@@ -166,15 +160,23 @@ static std::string process_line(const process_t& p, bool thread, const process_t
                 }
             }
         }
+        std::format_to(std::back_inserter(row), "{:<9} ", std::string_view(p.state).substr(0, 9));
+        const auto values = switch_values(command_source);
+        for (size_t i = 0; i < values.size(); ++i)
+        {
+            std::format_to(std::back_inserter(row), "{:<9} ", values[i]);
+        }
         if (!p.kernel_process)
         {
             std::format_to(std::back_inserter(row), "{:>{}} ", command_source.affinity.empty() ? "-" : command_source.affinity, affinity_width);
         }
         std::format_to(std::back_inserter(row), "{:>3} ", cpu);
     }
-    if (p.jid > 0 && !thread && !show_context_switches)
+    if (!thread && !show_context_switches)
     {
-        std::format_to(std::back_inserter(row), "[jail:{}] ", p.jid);
+        const auto domain = p.jid > 0 ? std::format("j{}", p.jid) : p.kernel_process ? "k"
+                                                                                     : "u";
+        std::format_to(std::back_inserter(row), "{:>4} {:>4} ", domain, p.threads);
     }
     row += command_source.command;
     return row;
@@ -186,7 +188,15 @@ static std::vector<display_row_t> lines(const snapshot_t& snapshot, int detail_p
     result.reserve(1 + snapshot.processes.size() + (detail_pid == -1 ? 0 : snapshot.threads.size()));
     bool                                  kernel_process = false;
     size_t                                affinity_width = 3;
+    size_t                                username_width = 4;
     const std::array<std::string_view, 2> switch_headers = {"NIVCSW", "NVCSW"};
+    if (detail_pid == -1)
+    {
+        for (const auto& process : snapshot.processes)
+        {
+            username_width = std::max(username_width, process.username.size());
+        }
+    }
     if (detail_pid != -1)
     {
         for (const auto& process : snapshot.processes)
@@ -213,36 +223,32 @@ static std::vector<display_row_t> lines(const snapshot_t& snapshot, int detail_p
     else
     {
         header += std::format("{:>5} ", "PID");
-        header += std::format("{:<10} ", "USERNAME");
-        header += std::format("{:>4} ", "THR");
+        header += std::format("{:<{}} ", "USER", username_width);
     }
-    header += std::format("{:>3} {:>4} ", "PRI", "NICE");
+    header += detail_pid != -1 ? std::format("{:>3} ", "PRI") : std::format("{:>5} ", "NICE");
     if (detail_pid == -1)
     {
-        header += std::format("{:>7} {:>6} ", "SIZE", "RES");
-    }
-    if (detail_pid == -1)
-    {
-        header += std::format("{:<6} {:>3} ", "STATE", "C");
-    }
-    else
-    {
-        header += std::format("{:<6} ", "STATE");
-        for (size_t i = 0; i < switch_headers.size(); ++i)
-        {
-            header += std::format("{:<9} ", switch_headers[i]);
-        }
+        header += std::format("{:>5} {:>5} ", "SIZE", "RES");
     }
     header += std::format("{:>6} ", "TIME");
     if (detail_pid == -1 || kernel_process)
     {
-        header += std::format("{:>9} ", "CPU");
+        header += std::format("{:>9} ", detail_pid != -1 ? "KCPU" : "CPU");
+    }
+    if (detail_pid == -1)
+    {
+        header += std::format("{:>4} {:>4} ", "DOM", "THR");
     }
     if (detail_pid != -1)
     {
         if (!kernel_process)
         {
-            header += std::format("{:>9} {:>9} ", "UCPU", "SCPU");
+            header += std::format("{:>9} {:>9} ", "UCPU", "KCPU");
+        }
+        header += std::format("{:<9} ", "STATE");
+        for (size_t i = 0; i < switch_headers.size(); ++i)
+        {
+            header += std::format("{:<9} ", switch_headers[i]);
         }
         if (!kernel_process)
         {
@@ -256,10 +262,10 @@ static std::vector<display_row_t> lines(const snapshot_t& snapshot, int detail_p
         std::string text;
         if (format_rows)
         {
-            text = process_line(p, thread, source, detail_pid != -1, affinity_width);
+            text = process_line(p, thread, source, detail_pid != -1, affinity_width, username_width);
         }
         result.push_back({std::move(text), p.pid, p.tid, thread, thread ? 1 : p.threads,
-                          &p, &source, affinity_width});
+                          &p, &source, affinity_width, username_width});
     };
     for (const auto& p : snapshot.processes)
     {
@@ -654,7 +660,7 @@ int tui(top_t& top)
                         if (table_row != 0 && displayed.text.empty())
                         {
                             displayed.text = process_line(*displayed.record, displayed.thread, *displayed.command_source,
-                                                          state.filtered_pid != -1, displayed.affinity_width);
+                                                          state.filtered_pid != -1, displayed.affinity_width, displayed.username_width);
                         }
                         frame[row].text       = displayed.text;
                         auto selection_color  = state.filtered_pid == -1 ? terminal_color_t::blue : terminal_color_t::green;

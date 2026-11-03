@@ -144,33 +144,40 @@ reverse-video attribute.
 Normal process-list columns follow FreeBSD `top`:
 
 1. PID
-2. Real username
-3. Thread count
-4. Priority
-5. Nice value
-6. Virtual memory (`SIZE`)
-7. Resident memory (`RES`)
-8. State or wait channel (`STATE`)
-9. Current or last CPU (`C`), or `-` if unavailable
-10. Accumulated CPU time (`TIME`)
-11. Unweighted CPU percentage (`CPU`)
-12. Command name (`COMMAND`)
+2. Real username (`USER`): left-aligned, minimum width 4; the column expands
+   to the longest username in the process list so following columns stay aligned
+3. Nice value (`NICE`): right-aligned, width 5
+4. Virtual memory (`SIZE`)
+5. Resident memory (`RES`)
+6. Accumulated CPU time (`TIME`)
+7. Unweighted CPU percentage (`CPU`)
+8. Domain (`DOM`): `k` for kernel processes, `u` for host user processes, or
+    `j<ID>` for processes in a jail
+9. Thread count (`THR`)
+10. Command name (`COMMAND`)
 
 Detail mode replaces `PID` with `TID`, replaces `CPU` with user-mode CPU
-percentage (`UCPU`) and kernel-mode CPU percentage (`SCPU`) for user processes,
-and omits `USERNAME`,
-`THR`, `SIZE`, and `RES`.
-For kernel processes, detail mode shows only `CPU`, omitting `UCPU` and
-`SCPU` from both the header and data rows. Kernel-process detail mode also
+percentage (`UCPU`) and kernel-mode CPU percentage (`KCPU`) for user processes,
+shows thread priority (`PRI`) and state (`STATE`), and omits `USERNAME`,
+`NICE`, `THR`, `SIZE`, and `RES`.
+For kernel processes, detail mode shows only `KCPU`, omitting `UCPU` and
+`KCPU` from both the header and data rows. Kernel-process detail mode also
 omits affinity information.
-`STATE` immediately follows `NICE`, followed by `NIVCSW` and `NVCSW`.
-`TIME` immediately precedes `UCPU` for user processes or `CPU` for kernel processes.
+`STATE` follows the CPU columns. `NIVCSW` and `NVCSW` immediately follow
+`STATE`; `A` and `C` follow the context-switch columns immediately before
+`THREAD`.
+The process list omits `PRI` and `STATE` because a process row does not
+represent all of its threads; detail mode displays them per thread.
+`TIME` immediately precedes `UCPU` for user processes or `KCPU` for kernel processes.
 CPU percentage columns are followed by
-the user-thread affinity column `A`, `C`, and `THREAD`.
+the user-thread affinity column `A`, `C`, and `THREAD`. The process list omits
+`C` because it would show only the representative thread's CPU, not the
+process's threads as a whole; detail mode retains `C` on each thread row.
 
-There is no separate JID column. In the normal process list, commands with
-`ki_jid > 0` are prefixed with `[jail:ID] `; host processes (`ki_jid == 0`) have
-no jail prefix. Detail-mode thread names omit the jail prefix on all rows.
+The `DOM` column appears only in the normal process list. A process with
+`ki_jid > 0` is shown as `j<ID>`; otherwise kernel processes show `k` and user
+processes show `u`. Jail IDs are not appended to command names. Kernel process
+names use the same unbracketed format as user process names.
 
 ### Threads and detail mode
 
@@ -222,17 +229,18 @@ to fit all displayed masks, with a minimum width of three and right alignment
 for both the header and values. For example:
 
 ```text
-NIVCSW    NVCSW         A   C THREAD
-12        345+10        0   0 thread
-67+2      8901+50   0,2,3   2 thread
+STATE     NIVCSW    NVCSW          A   C THREAD
+RUN       12        345            -   0 thread
+SLEEP     67+2      8901+50    0,2,3   2 worker
 ```
 
 Masks equal to the monitor's root CPU set show `-` in `A`. Inherited process or jail
 restrictions are included. Scheduler-level kernel thread bindings are not
 represented by this cpuset mask, so kernel-process detail mode omits affinity.
-The affinity indicates allowed CPUs, not the current CPU shown in the `C` column. An explicit binding
-to all available CPUs is indistinguishable from no restriction. Affinity lookup
-errors are reported; threads that exit during lookup are skipped.
+The affinity indicates allowed CPUs, not the current CPU shown in the detail
+view's per-thread `C` column. An explicit binding to all available CPUs is
+indistinguishable from no restriction. Affinity lookup errors are reported;
+threads that exit during lookup are skipped.
 
 Memory columns (`SIZE` and `RES`) are shown only in the normal process list.
 Swap usage is not displayed.
@@ -257,23 +265,23 @@ The first snapshot uses the kernel CPU estimate; later snapshots use runtime
 differences without process-age weighting. A multi-threaded process can exceed
 100%.
 
-For user processes, `UCPU` and `SCPU` use differences in
+For user processes, `UCPU` and `KCPU` use differences in
 `ki_rusage.ru_utime` and `ki_rusage.ru_stime`, divided by elapsed sample time.
-For kernel processes (`P_KPROC`) and their threads, only `CPU` is displayed;
+For kernel processes (`P_KPROC`) and their threads, only `KCPU` is displayed;
 kernel CPU is not split using rusage time differences.
 A value of 100% represents one CPU. Parent rows retain process
 totals in detail mode; child rows use per-thread accounting. These rates are
 not normalized to sum to 100%.
 
-For user processes, the first sample displays `0.00%` in `UCPU` and `SCPU`
+For user processes, the first sample displays `0.00%` in `UCPU` and `KCPU`
 until interval measurements are available; `CPU` uses the kernel estimate.
 On later samples, records with no previous entry
 or decreased accumulated runtime are treated as new instances: their
 accumulated CPU times are divided by the sample interval. For records treated
 as the same instance, if either user-mode or kernel-mode time decreases,
-both `UCPU` and `SCPU` show `-`. Sample intervals are measured using
+both `UCPU` and `KCPU` show `-`. Sample intervals are measured using
 `std::chrono::steady_clock`. Kernel accounting resolution and separately accounted
-interrupt time can cause user-process `UCPU` + `SCPU` to differ slightly
+interrupt time can cause user-process `UCPU` + `KCPU` to differ slightly
 from `CPU`.
 
 ## Code structure

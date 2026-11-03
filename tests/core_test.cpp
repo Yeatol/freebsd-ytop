@@ -33,7 +33,7 @@ static process_t record(int pid, lwpid_t tid, bool kernel = false)
     result.state = "RUN";
     result.command = "process";
     result.user_cpu_percent = 1.0;
-    result.system_cpu_percent = 2.0;
+    result.kernel_cpu_percent = 2.0;
     return result;
 }
 
@@ -52,10 +52,47 @@ static void test_layout()
     snapshot.threads[0].jid = 69;
     snapshot.threads[1].jid = 69;
     auto normal = lines(snapshot, -1);
-    check(normal.size() == 3 && normal[0].text.find("COMMAND") != std::string::npos, "process-only layout");
+    check(normal.size() == 3 && normal[0].text.find("DOM") != std::string::npos &&
+          normal[0].text.find("COMMAND") != std::string::npos &&
+          normal[0].text.find("USER") != std::string::npos &&
+          normal[0].text.find("USERNAME") == std::string::npos,
+          "process-only layout includes USER and domain columns");
+    check(normal[0].text.find("DOM") > normal[0].text.find("CPU") &&
+          normal[0].text.find("THR") > normal[0].text.find("DOM") &&
+          normal[0].text.find("COMMAND") > normal[0].text.find("THR"),
+          "domain and thread count columns precede command");
+    check(normal[0].text.find(" C ") == std::string::npos,
+          "process list omits the representative thread CPU column");
+    check(normal[0].text.find("PRI") == std::string::npos &&
+          normal[0].text.find("STATE") == std::string::npos &&
+          normal[0].text.find("NICE") != std::string::npos,
+          "process list omits thread priority and state but retains process nice");
+    size_t nice_column = normal[0].text.find("NICE") - 1;
+    check(normal[0].text.substr(nice_column, 6) == " NICE " &&
+          normal[1].text.substr(nice_column, 6) == "    0 ",
+          "process-list NICE column is five characters wide and right-aligned");
     check(normal[1].text.find("process") != std::string::npos && normal[1].text.find("nivcsw") == std::string::npos,
           "process name and counters in normal mode");
-    check(normal[1].text.find("[jail:69] process") != std::string::npos, "process list retains jail prefix");
+    size_t domain = normal[0].text.find("DOM") - 1;
+    check(normal[1].text.substr(domain, 4) == " j69", "jail process domain shows JID");
+    check(normal[2].text.ends_with("process"), "kernel process names are not bracketed in process list");
+    check(normal[2].text.substr(domain, 4) == "   k", "kernel process domain shows k");
+    check(normal[1].text.ends_with("process"), "command does not include jail ID suffix");
+    auto host_process = record(30, 300);
+    host_process.username = "longusername";
+    snapshot_t wide_users;
+    wide_users.processes = {record(31, 310), host_process};
+    auto wide_user_rows = lines(wide_users, -1);
+    size_t user_header = wide_user_rows[0].text.find("USER");
+    size_t wide_domain = wide_user_rows[0].text.find("DOM") - 1;
+    check(wide_user_rows[0].text.substr(user_header, host_process.username.size()) == "USER        ",
+          "user header expands to match the longest username in the process list");
+    check(wide_user_rows[1].text.substr(user_header, 4) == "test" &&
+          wide_user_rows[2].text.substr(user_header, host_process.username.size()) == host_process.username,
+          "all usernames align within the expanded column");
+    check(wide_user_rows[1].text.substr(wide_domain, 4) == "   u" &&
+          wide_user_rows[2].text.substr(wide_domain, 4) == "   u",
+          "columns after username remain aligned when a username is long");
     auto detail = lines(snapshot, 10);
     auto deferred = lines(snapshot, 10, false);
     check(deferred.size() == detail.size() && deferred[0].text == detail[0].text,
@@ -68,26 +105,31 @@ static void test_layout()
               "deferred rows retain identity and produce identical text on demand");
     }
     check(detail[0].text.find(" CPU ") == std::string::npos &&
-          detail[0].text.find("UCPU") != std::string::npos && detail[0].text.find("SCPU") != std::string::npos,
+          detail[0].text.find("UCPU") != std::string::npos && detail[0].text.find("KCPU") != std::string::npos &&
+          detail[0].text.find("PRI") != std::string::npos && detail[0].text.find("NICE") == std::string::npos,
           "user detail shows split CPU columns without total CPU");
     check(detail.size() == 3 && detail[1].tid == 100 && detail[2].tid == 101, "representative TID is not duplicated");
     check(!detail[1].thread && detail[2].thread, "parent and thread selection identities");
     size_t affinity = detail[0].text.find("  A ");
     check(affinity != std::string::npos, "affinity header has minimum width three");
-    size_t cpu = affinity + 4;
+    size_t cpu = detail[0].text.find("  C ", affinity);
     size_t name = detail[0].text.find("THREAD");
-    check(detail[0].text.substr(cpu, 4) == "  C ", "A precedes C");
+    size_t state = detail[0].text.find("STATE");
+    size_t switches = detail[0].text.find("NIVCSW ");
+    check(state < switches && switches == state + 10 && affinity == switches + 20 &&
+          cpu > affinity && name == cpu + 4,
+          "A and C immediately precede THREAD after context switches");
     for (size_t i = 1; i < detail.size(); ++i)
     {
-        check(detail[i].text.find("[jail:") == std::string::npos, "thread list omits jail prefix on all rows");
+        check(detail[i].text.find("(JID=") == std::string::npos, "thread list omits jail ID suffix on all rows");
         check(detail[i].text.substr(affinity, 4) == "  - ", "unrestricted affinity is right aligned");
         check(detail[i].text.substr(cpu, 4) == "  0 ", "CPU is right aligned");
+        check(detail[i].text.substr(state, 10) == "RUN       ", "thread state column aligns before context switches");
     }
     check(detail[1].text.substr(name) == "representative", "parent uses representative name");
     check(detail[2].text.substr(name) == "worker", "thread name has no appended counters");
-    size_t switches = detail[0].text.find("NIVCSW ");
-    check(switches == detail[0].text.find("STATE") + 7, "switch columns immediately follow STATE");
-    check(switches < affinity && detail[0].text.substr(switches, 20) == "NIVCSW    NVCSW     ", "two fixed-width switch columns precede A");
+    check(detail[0].text.substr(switches, 20) == "NIVCSW    NVCSW     ",
+          "two fixed-width switch columns follow STATE and precede A and C");
     check(detail[1].text.substr(switches, 20) == "0         0         ", "unavailable rates show only counts");
     check(detail[2].text.substr(switches, 20) == "12+3      345+50    ", "combined counts and rates are left aligned");
     snapshot.threads[1].nivcsw_per_second = 0.0;
@@ -115,17 +157,21 @@ static void test_layout()
     check(detail[1].text.substr(affinity, 8) == "      - " &&
           detail[2].text.substr(affinity, 8) == "0,2,3,7 ", "long affinity masks keep all rows aligned");
     auto kernel = lines(snapshot, 20);
-    check(kernel[0].text.find(" CPU ") != std::string::npos, "kernel detail retains total CPU");
-    check(normal[0].text.find(" CPU ") != std::string::npos, "process list retains total CPU");
-    check(kernel[0].text.find("UCPU") == std::string::npos && kernel[0].text.find(" A ") == std::string::npos,
-          "kernel layout omits user counters and affinity");
+    check(kernel[0].text.find(" KCPU ") != std::string::npos &&
+          kernel[0].text.find(" CPU ") == std::string::npos,
+          "kernel detail labels kernel CPU as KCPU");
+    check(normal[0].text.find(" CPU ") != std::string::npos, "process list retains total CPU percentage");
+    check(kernel[0].text.find("UCPU") == std::string::npos && kernel[0].text.find("KCPU") != std::string::npos &&
+          kernel[0].text.find(" A ") == std::string::npos,
+          "kernel layout shows KCPU and omits user counters and affinity");
     check(kernel[1].text.find("process") == kernel[0].text.find("THREAD"), "kernel columns aligned");
     check(lines(snapshot, 99).size() == 1, "disappeared process leaves only header");
     snapshot.threads.erase(snapshot.threads.begin());
     detail = lines(snapshot, 10);
     check(detail.size() == 3 && detail[1].text.ends_with("process"),
           "missing representative falls back to process name");
-    check(memory(9999) == "9999K" && memory(10240) == "10M", "memory unit boundary");
+    check(memory(1023) == "1023K" && memory(1024) == "1M" &&
+          memory(9999) == "10M" && memory(10240) == "10M", "memory unit boundary");
     check(runtime(59500000) == "1:00" && runtime(6000000000) == "1h", "runtime rounding and hour format");
 }
 
