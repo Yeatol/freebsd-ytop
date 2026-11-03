@@ -663,8 +663,7 @@ int tui(top_t& top)
                                                           state.filtered_pid != -1, displayed.affinity_width, displayed.username_width);
                         }
                         frame[row].text       = displayed.text;
-                        auto selection_color  = state.filtered_pid == -1 ? terminal_color_t::blue : terminal_color_t::green;
-                        frame[row].foreground = row_is_selected ? selection_color : terminal_color_t::normal;
+                        frame[row].foreground = row_is_selected ? terminal_color_t::blue : terminal_color_t::normal;
                     }
                     if (!terminal_render(terminal, frame, error))
                     {
