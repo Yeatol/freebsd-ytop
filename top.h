@@ -28,12 +28,14 @@
 #pragma once
 
 #include <sys/types.h>
+#include <sys/dkstat.h>
 
+#include <array>
 #include <chrono>
-#include <vector>
 #include <string>
-#include <stdint.h>
+#include <vector>
 #include <optional>
+#include <stdint.h>
 #include <unordered_map>
 
 struct __kvm;
@@ -43,37 +45,49 @@ struct process_t
     int                   pid;
     lwpid_t               tid;
     int                   jid;
+    bool                  kernel_process;
     std::string           username;
     int                   threads;
     int                   priority;
     std::string           nice;
     uint64_t              size_kb;
     uint64_t              resident_kb;
-    uint64_t              swap_kb;
     std::string           state;
     int                   cpu;
     uint64_t              runtime_us;
     double                cpu_percent;
     uint64_t              nvcsw;
     uint64_t              nivcsw;
+    std::optional<double> nvcsw_per_second;
+    std::optional<double> nivcsw_per_second;
     std::optional<double> user_cpu_percent;
-    std::optional<double> system_cpu_percent;
+    std::optional<double> kernel_cpu_percent;
     std::string           command;
     std::string           affinity;
+};
+
+struct cpu_t
+{
+    int                         id = -1;
+    std::array<long, CPUSTATES> ticks{};
+    std::array<int, CPUSTATES>  percent_tenths{};
 };
 
 struct snapshot_t
 {
     std::vector<process_t> processes;
     std::vector<process_t> threads;
+    cpu_t                  cpu;
+    std::vector<cpu_t>     cpus;
 };
 
 struct previous_process_t
 {
-    std::chrono::steady_clock::time_point first_seen;
-    uint64_t                              runtime_us;
-    uint64_t                              user_us;
-    uint64_t                              system_us;
+    uint64_t runtime_us;
+    uint64_t user_us;
+    uint64_t kernel_us;
+    uint64_t nvcsw;
+    uint64_t nivcsw;
 };
 
 struct top_t
@@ -85,10 +99,14 @@ struct top_t
     std::unordered_map<int, previous_process_t> previous;
     std::chrono::steady_clock::time_point       thread_sampled_at{};
     std::unordered_map<int, previous_process_t> thread_previous;
+    int                                         max_cpus    = 0;
+    int                                         sampled_pid = -1;
+    std::array<long, CPUSTATES>                 previous_cpu_ticks{};
+    std::vector<std::array<long, CPUSTATES>>    previous_per_cpu_ticks;
 };
 
 bool top_open(top_t& top, std::string& error);
 
 void top_close(top_t& top);
 
-bool top_sample(top_t& top, snapshot_t& snapshot, std::string& error);
+bool top_sample(top_t& top, snapshot_t& snapshot, std::string& error, int detail_pid = -1);

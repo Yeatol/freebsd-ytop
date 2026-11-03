@@ -2,169 +2,89 @@
 
 [![FreeBSD port version](https://repology.org/badge/version-for-repo/freebsd/ytop.svg)](https://www.freshports.org/sysutils/ytop/)
 
-A minimal process monitor for FreeBSD, written in C++23. It uses FreeBSD's
-base-system compiler, `libkvm`, and `ncurses`.
+A minimal process monitor for FreeBSD, written in C++23, for monitoring CPU-bound server applications. It uses FreeBSD's base-system compiler and `libkvm`, with a built-in VT terminal module.
 
-## Build and run
+## Dependencies
 
-```sh
-make
-./ytop
-```
+- C++23-capable compiler
+- FreeBSD `make`
+- `libkvm`
 
-Install to `/usr/local/bin` by default:
-
-```sh
-make install
-```
-
-An interactive terminal is required. Command-line arguments are not supported.
-Live-process access follows FreeBSD permissions and jail visibility rules; root
-access is not required when the system permits access.
-
-## Controls
-
-| Input | Action |
-| --- | --- |
-| `Up` / `Down` | Move the selection by one displayed row, including thread rows. Selection does not wrap; the list scrolls to keep it visible. With no selection, `Down` selects the first visible row and `Up` selects the last visible row. |
-| `Space` | For a selected multi-threaded process, expand or collapse its thread rows. For a selected single-threaded process, show or hide its main thread's context-switch counts. Does nothing on a thread row or when nothing is selected. |
-| Left-click | Select a process. Clicking the already selected process toggles its thread rows when it has more than one thread, or toggles its main thread's context-switch counts when it has one thread. Clicking the header or blank space does not change the selection. |
-| Mouse wheel | Scroll three rows per step. Scrolling is bounded by the list and adjusted when rows disappear or collapse. |
-| `q` / `Ctrl+C` | Quit and restore the terminal. |
-
-Other keyboard input is ignored. Terminal resizing is supported. Escape keys and
-incomplete mouse escape sequences do not exit the monitor. Mouse reporting
-support is required.
-
-The display refreshes every second. The cursor is hidden while the monitor runs
-and its previous visibility is restored on exit. The bottom line is cleared
-before returning to the shell so the prompt does not overlap a process row on
-terminals without an alternate screen.
-
-## Display
-
-Only the process table is displayed, with its header on the first line. The
-header stays fixed while scrolling. Load averages, process summaries, and
-keyboard hints are not shown.
-
-Columns follow FreeBSD `top`, with a TID column after PID:
-
-1. PID
-2. TID
-3. Real username
-4. Thread count
-5. Priority
-6. Nice value
-7. Virtual and resident memory
-8. Swap usage
-9. State or wait channel
-10. CPU
-11. Accumulated CPU time
-12. Unweighted CPU percentage (`CPU`)
-13. User-mode CPU percentage (`CPU_USR`)
-14. Kernel-mode CPU percentage (`CPU_SYS`)
-15. Command name
-
-There is no separate JID column. Commands for processes and threads with
-`ki_jid > 0` are prefixed with `[jail:ID] `; host processes (`ki_jid == 0`) have
-no jail prefix.
-
-### Threads and expansion
-
-Collapsed processes have one row, and `THR` shows the total thread count. The
-TID on that row is `ki_tid` of the representative thread returned by
-`kvm_getprocs(KERN_PROC_PROC)`.
-
-Expand a process to show its threads underneath it. Expanded rows are obtained
-from `kvm_getprocs(KERN_PROC_ALL)` and are sorted by TID within each process.
-The TID already shown on the parent row is omitted from the child rows. Thread
-rows use `->` in the PID column and can be selected without toggling the parent.
-Multiple processes can remain expanded at once. Expansion persists across
-refreshes and is cleared when a process disappears from a sample or its
-accumulated runtime decreases. PID reuse between samples is not detected if
-the new process's accumulated runtime is at least that of the previous process.
-
-Expanded rows show per-thread state, runtime, CPU usage, and thread names.
-Thread COMMAND uses `process_name{thread_name}`, omitting the braces and thread
-name when both names are identical. Unnamed threads use `process_name{}`.
-
-While expanded, the parent COMMAND also uses the thread name matching its
-displayed TID; other parent columns retain process-wide values. The parent and
-each displayed thread append that thread's cumulative voluntary and involuntary
-context-switch counts in the form `(nivcsw=N, nvcsw=N)`. These values come from
-`ki_rusage.ru_nivcsw` and `ki_rusage.ru_nvcsw`, respectively. For a
-single-threaded process, `Space` or clicking the selected process toggles the
-parent's counts without adding a thread row. If the representative thread
-disappears between the two kernel queries, the parent keeps the process name
-and process counters until a matching sample is available. Collapsing restores
-the process name and hides the counts.
-
-Expanded rows, including the parent row's representative TID, prefix COMMAND
-with the thread's effective CPU affinity. For example:
+## Process list
 
 ```text
-[CPU0] process{thread} (nivcsw=N, nvcsw=N)
-[jail:69] [CPU0,2,3] process{thread} (nivcsw=N, nvcsw=N)
+  PID USER    NICE  SIZE   RES   TIME       CPU  DOM  THR COMMAND
+    0 root       -    0K    5M   0:07     0.04%    k  300 kernel
+    1 root       0   15M    3M   0:00     0.00%    u    1 init
+   11 root    ki31    0K  256K    54h  1686.88%    k   16 idle
+   12 root       -    0K   64K   0:00     0.00%    k    4 intr
+ 1700 nobody     0   82M   30M   0:00     0.00%    u   17 stund
+ 1800 root       0  256M  128M   0:12    12.50%   j1    1 c++
+ 1801 root       0  256M  128M   0:24    25.00%   j2    1 c++
+ 1802 root       0  256M  128M   0:36    37.50%   j3    1 c++
 ```
 
-Masks equal to the monitor's root CPU set are omitted. Inherited process or jail
-restrictions and kernel thread bindings are included. The affinity indicates
-allowed CPUs, not the current CPU shown in the `C` column. An explicit binding
-to all available CPUs is indistinguishable from no restriction. Affinity lookup
-errors are reported; threads that exit during lookup are skipped.
+- `PID`: Process ID.
+- `USER`: Username associated with the process's real user ID.
+- `NICE`: Nice value for time-sharing processes; lower values mean higher scheduling priority. Real-time and idle priorities use `r` and `i` prefixes, respectively; kernel threads have an additional `k` prefix, fixed-priority scheduling has an `F` suffix, and `-` means not applicable.
+- `SIZE`: Process virtual memory size, including text, data, and stack.
+- `RES`: Resident memory size.
+- `TIME`: Accumulated user and system CPU time for the process.
+- `CPU`: Unweighted CPU percentage; 100% represents one logical CPU, and multithreaded processes can exceed 100%.
+- `DOM`: Process domain: `k` for kernel processes, `u` for host user processes, and `j<ID>` for processes in a jail.
+- `THR`: Total thread count.
+- `COMMAND`: Command name.
 
-Thread memory columns refer to shared process memory. SWAP follows the
-reference `top` formula: `max(ki_swrss - ki_rssize, 0)` pages, converted to the
-same K/M/G units as SIZE and RES. Thread SWAP is also shared process memory,
-not an additional per-thread allocation.
+## Thread list
 
-### CPU accounting
+```text
+   TID PRI   TIME      UCPU      KCPU STATE     NIVCSW    NVCSW       A   C THREAD
+101161  59   0:00     0.00%     0.00% sigwai    0         4           -   6 main-thread
+101200  59   0:00     0.00%     0.00% kqread    1         1           0   0 network-thread-0
+101201  59   0:00     0.00%     0.00% kqread    0         2           1   1 network-thread-1
+101202  59   0:00     0.00%     0.00% kqread    1         2           2   2 network-thread-2
+101203  59   0:00     0.00%     0.00% kqread    1         5           3   3 network-thread-3
+101204  59   0:00     0.00%     0.00% kqread    0         3           4   4 network-thread-4
+101205  59   0:00     0.00%     0.00% kqread    1         3           5   5 network-thread-5
+101206  59   0:00     0.00%     0.00% kqread    1         3           6   6 network-thread-6
+101207  59   0:00     0.00%     0.00% kqread    1         2           7   7 network-thread-7
+101208  59   0:00     0.00%     0.00% kqread    1         3           8   8 network-thread-8
+101209  59   0:00     0.00%     0.00% kqread    1         2           9   9 network-thread-9
+101210  59   0:00     0.00%     0.00% kqread    0         3          10  10 network-thread-10
+101211  59   0:00     0.00%     0.00% kqread    1         3          11  11 network-thread-11
+101212  59   0:00     0.00%     0.00% kqread    0         4          12  12 network-thread-12
+101213  59   0:00     0.00%     0.00% kqread    1         2          13  13 network-thread-13
+101214  59   0:00     0.00%     0.00% kqread    1         2          14  14 network-thread-14
+101215  59   0:00     0.00%     0.00% kqread    1         3          15  15 network-thread-15
+```
 
-Process and thread CPU histories are tracked separately. System processes and
-kernel idle threads are included; zombies are hidden. Processes are sorted by
-PID in ascending order.
+- `TID`: Thread ID.
+- `PRI`: Current thread scheduling priority; lower values mean higher priority.
+- `TIME`: Accumulated user and system CPU time for the thread.
+- `UCPU`: User CPU percentage.
+- `KCPU`: System CPU percentage; kernel threads show only `KCPU`.
+- `STATE`: Current thread state; sleeping threads show the wait channel, and threads blocked on a lock show its name prefixed with `*`.
+- `NIVCSW`: Cumulative involuntary context-switch count; `+rate` is the number of switches per second.
+- `NVCSW`: Cumulative voluntary context-switch count; `+rate` is the number of switches per second.
+- `A`: CPU affinity.
+- `C`: CPU ID on which the thread is running or last ran.
+- `THREAD`: Thread name.
 
-The first snapshot uses the kernel CPU estimate; later snapshots use runtime
-differences without process-age weighting. A multi-threaded process can exceed
-100%.
+## Mouse interaction
 
-For user processes, `CPU_USR` and `CPU_SYS` use differences in
-`ki_rusage.ru_utime` and `ki_rusage.ru_stime`, divided by elapsed sample time.
-For kernel processes (`P_KPROC`) and their threads, `CPU_USR` is shown as `-`
-and `CPU_SYS` equals `CPU`; kernel CPU is not split using rusage time
-differences. A value of 100% represents one CPU. Parent rows retain process
-totals when expanded; child rows use per-thread accounting. These rates are
-not normalized to sum to 100%.
+- Left-click: Select a row; click the selected process again to enter the thread list; click the thread-table header to toggle the CPU grid.
+- Right-click: Clear selection; with no selection in the thread list, return to the process list and select the original process if it still exists.
+- Mouse wheel: Move one row per step with a selection, or scroll three rows per step without a selection.
 
-For user processes, the first sample displays `0.00%` until interval
-measurements are available. On later samples, records with no previous entry
-or decreased accumulated runtime are treated as new instances: their
-accumulated CPU times are divided by the sample interval. For records treated
-as the same instance, if either user-mode or kernel-mode time decreases,
-both `CPU_USR` and `CPU_SYS` show `-`. Sample intervals are measured using
-`std::chrono::steady_clock`. Kernel accounting resolution and separately accounted
-interrupt time can cause user-process `CPU_USR` + `CPU_SYS` to differ slightly
-from `CPU`.
+## Keyboard interaction
 
-## Code structure
+- `Up`: Select the previous row, scrolling automatically without wrapping; with no selection, select the last visible row.
+- `Down`: Select the next row, scrolling automatically without wrapping; with no selection, select the first visible row.
+- `Space`: Enter the selected process's thread list and clear selection; in the thread list, return and select the original process if it still exists.
+- `Esc`: Clear selection; with no selection in the thread list, return and select the original process if it still exists.
+- `Tab`: Toggle the thread list's CPU grid, hidden by default.
+- `q`: Quit and restore the terminal.
 
-The code uses data-only structs and free functions, without custom classes or
-namespaces. Custom types use lowercase snake_case names ending in `_t`.
-File-local helpers use `static` linkage.
-
-Initialize a `top_t` with `top_t top{}`, call `top_open` and `top_sample`, then
-call `top_close` on both success and failure paths to release the kernel handle
-and sampling history. The TUI explicitly restores the terminal before
-returning, including on errors.
-
-| Files | Responsibility |
-| --- | --- |
-| `top.cpp` / `top.h` | Process and thread sampling through `kvm_getprocs`, including per-thread context-switch counts, username lookup, and ascending PID sorting. |
-| `tui.cpp` / `tui.h` | Curses rendering, signal handling, and refresh loop. |
-| `main.cpp` | Application startup and cleanup. |
-
-## Scope
-
-This demo intentionally omits system CPU, memory, and swap summaries, thread
-mode, full command arguments, filtering, and interactive sort selection. It is
-not a complete replacement for FreeBSD `top`.
+## License
+[](https://github.com/Yeatol/freebsd-stund#license)
+This project is licensed under the BSD 2-Clause "Simplified" License. See the `LICENSE` file for full terms and conditions.

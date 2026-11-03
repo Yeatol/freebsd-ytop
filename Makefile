@@ -1,10 +1,10 @@
 PROG_CXX=	ytop
-SRCS=		main.cpp tui.cpp top.cpp
+SRCS=		main.cpp tui.cpp top.cpp terminal.cpp
 MAN=
 
 CXXSTD=		c++23
-LDADD+=		-lkvm -lncursesw
-DPADD+=		${LIBKVM} ${LIBNCURSESW}
+LDADD+=		-lkvm
+DPADD+=		${LIBKVM}
 
 PREFIX?=	/usr/local
 BINDIR?=	${PREFIX}/bin
