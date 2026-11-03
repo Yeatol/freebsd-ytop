@@ -291,9 +291,8 @@ from `CPU`.
 ### System CPU sampling
 
 `top_sample` accepts an optional detail PID (`-1` for the process list) and
-collects whole-system and per-CPU data when requested. The TUI requests CPU
-sampling only while the thread-detail CPU grid is visible; otherwise it samples
-processes and threads without reading CPU counters.
+collects whole-system and per-CPU data on every sample, independently of
+whether the optional thread-detail CPU grid is visible.
 Like FreeBSD `top`, it sizes the per-CPU buffer using
 `kern.smp.maxcpus`, reads `kern.cp_times`, and omits CPU slots whose counters
 are all zero. `snapshot.cpus` retains the actual CPU IDs in ascending order,

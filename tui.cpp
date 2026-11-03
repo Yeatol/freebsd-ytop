@@ -573,8 +573,7 @@ int tui(top_t& top)
             std::vector<terminal_row_t> frame;
             std::vector<terminal_row_t> cpu_frame;
             auto                        refresh = [&] {
-                if (!top_sample(top, snapshot, error, state.filtered_pid,
-                                state.filtered_pid != -1 && state.show_cpu))
+                if (!top_sample(top, snapshot, error, state.filtered_pid))
                 {
                     status = 1;
                     return false;

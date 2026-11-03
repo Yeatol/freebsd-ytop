@@ -478,7 +478,7 @@ static bool sample_cpus(const top_t& top, snapshot_t& snapshot, std::vector<std:
     return true;
 }
 
-bool top_sample(top_t& top, snapshot_t& snapshot, std::string& error, int detail_pid, bool sample_cpu)
+bool top_sample(top_t& top, snapshot_t& snapshot, std::string& error, int detail_pid)
 {
     snapshot_t                                        next;
     snapshot_t                                        threads;
@@ -498,22 +498,19 @@ bool top_sample(top_t& top, snapshot_t& snapshot, std::string& error, int detail
         return false;
     }
     std::vector<std::array<long, CPUSTATES>> per_cpu_ticks;
-    if (sample_cpu && !sample_cpus(top, next, per_cpu_ticks, error))
+    if (!sample_cpus(top, next, per_cpu_ticks, error))
     {
         return false;
     }
     std::ranges::sort(threads.processes, compare_threads);
-    next.threads          = std::move(threads.processes);
-    top.previous          = std::move(process_history.previous);
-    top.sampled_at        = process_history.sampled_at;
-    top.thread_previous   = std::move(thread_history.previous);
-    top.thread_sampled_at = thread_history.sampled_at;
-    top.sampled_pid       = detail_pid;
-    if (sample_cpu)
-    {
-        top.previous_cpu_ticks     = next.cpu.ticks;
-        top.previous_per_cpu_ticks = std::move(per_cpu_ticks);
-    }
-    snapshot = std::move(next);
+    next.threads               = std::move(threads.processes);
+    top.previous               = std::move(process_history.previous);
+    top.sampled_at             = process_history.sampled_at;
+    top.thread_previous        = std::move(thread_history.previous);
+    top.thread_sampled_at      = thread_history.sampled_at;
+    top.sampled_pid            = detail_pid;
+    top.previous_cpu_ticks     = next.cpu.ticks;
+    top.previous_per_cpu_ticks = std::move(per_cpu_ticks);
+    snapshot                   = std::move(next);
     return true;
 }

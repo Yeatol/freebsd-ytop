@@ -553,14 +553,6 @@ static void test_live_sampling()
     auto process_count = snapshot.processes.size();
     int max_cpus = top.max_cpus;
     top.max_cpus = 0;
-    auto previous_cpu_ticks = top.previous_cpu_ticks;
-    auto previous_per_cpu_ticks = top.previous_per_cpu_ticks;
-    check(top_sample(top, snapshot, error, getpid(), false), error);
-    check(snapshot.cpus.empty() && snapshot.cpu.ticks == std::array<long, CPUSTATES>{} &&
-          top.previous_cpu_ticks == previous_cpu_ticks &&
-          top.previous_per_cpu_ticks == previous_per_cpu_ticks,
-          "disabled CPU sampling skips CPU data and preserves sampling baselines");
-    previous_time = top.sampled_at;
     check(!top_sample(top, snapshot, error, getpid()) && !error.empty(), "malformed CPU buffer fails explicitly");
     check(top.sampled_at == previous_time && snapshot.processes.size() == process_count, "failed sample preserves committed state");
     top.max_cpus = max_cpus;
