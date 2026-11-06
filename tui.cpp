@@ -576,6 +576,17 @@ int tui(top_t& top)
                     status = 1;
                     return false;
                 }
+                if (state.filtered_pid != -1 && !std::ranges::any_of(snapshot.processes, [&](const process_t& process) {
+                        return process.pid == state.filtered_pid;
+                    }))
+                {
+                    exit_detail_view(state);
+                    if (!top_sample(top, snapshot, error))
+                    {
+                        status = 1;
+                        return false;
+                    }
+                }
                 display_output = lines(snapshot, state.filtered_pid, false);
                 cpu_rows_dirty = true;
                 next_sample    = std::chrono::steady_clock::now() + std::chrono::seconds(1);
