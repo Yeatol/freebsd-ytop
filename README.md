@@ -72,17 +72,16 @@ A minimal process monitor for FreeBSD, written in C++23, for monitoring CPU-boun
 
 ## Mouse interaction
 
-- Left-click: Select a row; click the selected process again to enter the thread list; click the thread-table header to toggle the CPU grid.
+- Left-click: Select a row; click the selected process again to enter the thread list.
 - Right-click: Clear selection; with no selection in the thread list, return to the process list and select the original process if it still exists.
-- Mouse wheel: Move one row per step with a selection, or scroll three rows per step without a selection.
+- Mouse wheel: Scroll three rows per step without changing selection.
 
 ## Keyboard interaction
 
-- `Up`: Select the previous row, scrolling automatically without wrapping; with no selection, select the last visible row.
-- `Down`: Select the next row, scrolling automatically without wrapping; with no selection, select the first visible row.
-- `Space`: Enter the selected process's thread list and clear selection; in the thread list, return and select the original process if it still exists.
-- `Esc`: Clear selection; with no selection in the thread list, return and select the original process if it still exists.
-- `Tab`: Toggle the thread list's CPU grid, hidden by default.
+- `Up`: Select the previous row, wrapping from the first row to the last and scrolling automatically; with no selection, select the last row of the entire list.
+- `Down`: Select the next row, wrapping from the last row to the first and scrolling automatically; with no selection, select the first row of the entire list.
+- `Right`: Enter the selected process's thread list and clear selection; with no selected process or already in the thread list, do nothing.
+- `Left`: Clear selection first; with no selection in the thread list, return to the process list and select the original process if it still exists. With no selection in the process list, do nothing.
 - `q`: Quit and restore the terminal.
 
 ## License

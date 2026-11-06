@@ -315,11 +315,19 @@ static void move_selection(const std::vector<display_row_t>& output, int directi
     }
     if (selected_row_index == 0)
     {
-        selected_row_index = direction > 0 ? scroll_offset + 1 : std::min(total_rows, scroll_offset + visible_rows);
+        selected_row_index = direction > 0 ? 1 : total_rows;
     }
     else
     {
-        selected_row_index = std::clamp(selected_row_index + direction, 1, total_rows);
+        selected_row_index += direction;
+        if (selected_row_index < 1)
+        {
+            selected_row_index = total_rows;
+        }
+        else if (selected_row_index > total_rows)
+        {
+            selected_row_index = 1;
+        }
     }
     const auto& row = output[selected_row_index];
     selected_pid    = row.pid;
@@ -459,11 +467,6 @@ static int table_hit(const view_layout_t& layout, int visible_lines, int x, int 
                : -1;
 }
 
-static bool table_header_hit(const view_layout_t& layout, int x, int y)
-{
-    return x >= 0 && x < layout.width && y == 0;
-}
-
 static terminal_row_t cpu_grid_line(const std::vector<cpu_t>& cpus, int row, const cpu_layout_t& layout)
 {
     terminal_row_t result;
@@ -503,7 +506,6 @@ struct view_state_t
     int     pressed_pid          = -1;
     lwpid_t pressed_tid          = -1;
     bool    toggle_on_release    = false;
-    bool    show_cpu             = false;
 };
 
 static void clear_press(view_state_t& state)
@@ -534,7 +536,6 @@ static bool enter_detail_view(view_state_t& state)
     state.scroll_before_filter = state.scroll_offset;
     state.scroll_offset        = 0;
     state.filtered_pid         = state.selected_pid;
-    state.show_cpu             = false;
     clear_selection(state);
     return true;
 }
@@ -544,24 +545,8 @@ static int exit_detail_view(view_state_t& state)
     int target_pid      = state.filtered_pid;
     state.filtered_pid  = -1;
     state.scroll_offset = state.scroll_before_filter;
-    state.show_cpu      = false;
     clear_selection(state);
     return target_pid;
-}
-
-static bool toggle_cpu_view(view_state_t& state, bool& cpu_rows_dirty, std::chrono::steady_clock::time_point& next_sample)
-{
-    if (state.filtered_pid == -1)
-    {
-        return false;
-    }
-    state.show_cpu = !state.show_cpu;
-    cpu_rows_dirty = true;
-    if (state.show_cpu)
-    {
-        next_sample = std::chrono::steady_clock::now();
-    }
-    return true;
 }
 
 int tui(top_t& top)
@@ -643,7 +628,7 @@ int tui(top_t& top)
                 }
                 redraw                 = redraw || resized;
                 auto layout            = view_layout(terminal.width, terminal.height, static_cast<int>(snapshot.cpus.size()),
-                                                     state.filtered_pid != -1 && state.show_cpu);
+                                                     state.filtered_pid != -1);
                 int  total_rows        = static_cast<int>(display_output.size()) - 1;
                 int  max_offset        = std::max(0, total_rows - layout.visible_rows);
                 state.scroll_offset    = std::clamp(state.scroll_offset, 0, max_offset);
@@ -713,14 +698,7 @@ int tui(top_t& top)
                     if (input.kind == terminal_event_kind_t::mouse_press)
                     {
                         clear_press(state);
-                        if (state.filtered_pid != -1 && table_header_hit(layout, input.x, input.y))
-                        {
-                            if (toggle_cpu_view(state, cpu_rows_dirty, next_sample))
-                            {
-                                redraw = true;
-                            }
-                        }
-                        else if (table_y != -1)
+                        if (table_y != -1)
                         {
                             const auto& pressed_row  = display_output[table_y + state.scroll_offset];
                             bool        was_selected = row_selected(pressed_row, state);
@@ -745,7 +723,7 @@ int tui(top_t& top)
                         clear_press(state);
                     }
                 }
-                else if (input.kind == terminal_event_kind_t::escape || input.kind == terminal_event_kind_t::mouse_right_press)
+                else if (input.kind == terminal_event_kind_t::mouse_right_press)
                 {
                     if (state.selected_pid == -1 && state.filtered_pid != -1)
                     {
@@ -761,19 +739,27 @@ int tui(top_t& top)
                 {
                     redraw = true;
                 }
-                else if (input.kind == terminal_event_kind_t::character && input.character == '\t')
+                else if (input.kind == terminal_event_kind_t::right)
                 {
-                    if (toggle_cpu_view(state, cpu_rows_dirty, next_sample))
+                    enter_detail();
+                }
+                else if (input.kind == terminal_event_kind_t::left)
+                {
+                    if (state.selected_pid != -1)
                     {
+                        clear_selection(state);
                         redraw = true;
+                    }
+                    else if (state.filtered_pid != -1)
+                    {
+                        exit_detail();
                     }
                 }
                 else if (input.kind == terminal_event_kind_t::up || input.kind == terminal_event_kind_t::down ||
                          input.kind == terminal_event_kind_t::wheel_up || input.kind == terminal_event_kind_t::wheel_down)
                 {
                     int direction = input.kind == terminal_event_kind_t::up || input.kind == terminal_event_kind_t::wheel_up ? -1 : 1;
-                    if ((input.kind == terminal_event_kind_t::wheel_up || input.kind == terminal_event_kind_t::wheel_down) &&
-                        state.selected_pid == -1)
+                    if (input.kind == terminal_event_kind_t::wheel_up || input.kind == terminal_event_kind_t::wheel_down)
                     {
                         scroll_view(display_output, direction, layout.visible_rows, state.scroll_offset);
                     }
@@ -782,17 +768,6 @@ int tui(top_t& top)
                         move_selection(display_output, direction, layout.visible_rows, state.selected_pid, state.selected_tid, state.scroll_offset);
                     }
                     redraw = true;
-                }
-                else if (input.kind == terminal_event_kind_t::character && input.character == ' ')
-                {
-                    if (state.filtered_pid != -1)
-                    {
-                        exit_detail();
-                    }
-                    else
-                    {
-                        enter_detail();
-                    }
                 }
             }
         }

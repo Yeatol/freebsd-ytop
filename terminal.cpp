@@ -754,9 +754,23 @@ static bool decode_input(terminal_t& terminal, terminal_event_t& event)
                     sgr_mouse(parameters.substr(1), final == 'm', event);
                 }
                 else if ((parameters.empty() || parameters == "1" || parameters.starts_with("1;")) &&
-                         (final == 'A' || final == 'B'))
+                         (final >= 'A' && final <= 'D'))
                 {
-                    event.kind = final == 'A' ? terminal_event_kind_t::up : terminal_event_kind_t::down;
+                    switch (final)
+                    {
+                        case 'A':
+                            event.kind = terminal_event_kind_t::up;
+                            break;
+                        case 'B':
+                            event.kind = terminal_event_kind_t::down;
+                            break;
+                        case 'C':
+                            event.kind = terminal_event_kind_t::right;
+                            break;
+                        case 'D':
+                            event.kind = terminal_event_kind_t::left;
+                            break;
+                    }
                 }
             }
             else

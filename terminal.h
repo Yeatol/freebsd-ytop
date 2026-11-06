@@ -44,6 +44,8 @@ enum class terminal_event_kind_t
     character,
     up,
     down,
+    left,
+    right,
     mouse_press,
     mouse_release,
     mouse_right_press,
