@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <unordered_map>
 
-struct __kvm;
+struct procstat;
 
 struct process_t
 {
@@ -92,7 +92,7 @@ struct previous_process_t
 
 struct top_t
 {
-    __kvm*                                      kernel    = nullptr;
+    procstat*                                   procstat  = nullptr;
     long                                        page_size = 0;
     int                                         fscale    = 0;
     std::chrono::steady_clock::time_point       sampled_at{};

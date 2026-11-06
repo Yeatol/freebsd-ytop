@@ -2,13 +2,13 @@
 
 [![FreeBSD port version](https://repology.org/badge/version-for-repo/freebsd/ytop.svg)](https://www.freshports.org/sysutils/ytop/)
 
-A minimal process monitor for FreeBSD, written in C++23, for monitoring CPU-bound server applications. It uses FreeBSD's base-system compiler and `libkvm`, with a built-in VT terminal module.
+A minimal process monitor for FreeBSD, written in C++23, for monitoring CPU-bound server applications. It uses FreeBSD's base-system compiler and `libprocstat`, with a built-in VT terminal module.
 
 ## Dependencies
 
 - C++23-capable compiler
 - FreeBSD `make`
-- `libkvm`
+- `libprocstat`
 
 ## Process list
 

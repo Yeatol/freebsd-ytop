@@ -27,10 +27,11 @@
 
 #include "top.h"
 
-#include <kvm.h>
+#include <sys/param.h>
+#include <sys/queue.h>
+#include <sys/socket.h>
+#include <libprocstat.h>
 #include <pwd.h>
-#include <fcntl.h>
-#include <paths.h>
 #include <unistd.h>
 #include <sys/proc.h>
 #include <sys/time.h>
@@ -52,6 +53,7 @@
 #include <iterator>
 #include <limits.h>
 #include <optional>
+#include <memory>
 #include <stddef.h>
 #include <stdint.h>
 #include <algorithm>
@@ -136,22 +138,15 @@ static bool read_integer(const char* name, int& value, std::string& error)
 
 void top_close(top_t& top)
 {
-    if (top.kernel != nullptr)
+    if (top.procstat != nullptr)
     {
-        kvm_close(top.kernel);
+        procstat_close(top.procstat);
     }
     top = {};
 }
 
 bool top_open(top_t& top, std::string& error)
 {
-    char message[_POSIX2_LINE_MAX]{};
-    top.kernel = kvm_openfiles(nullptr, _PATH_DEVNULL, nullptr, O_RDONLY, message);
-    if (top.kernel == nullptr)
-    {
-        error = std::format("kvm_openfiles: {}", message);
-        return false;
-    }
     top.page_size = sysconf(_SC_PAGESIZE);
     if (top.page_size <= 0)
     {
@@ -176,6 +171,12 @@ bool top_open(top_t& top, std::string& error)
         error = "kern.smp.maxcpus: invalid CPU count";
         return false;
     }
+    top.procstat = procstat_open_sysctl();
+    if (top.procstat == nullptr)
+    {
+        error = std::format("procstat_open_sysctl: {}", std::strerror(errno));
+        return false;
+    }
     return true;
 }
 
@@ -195,6 +196,19 @@ struct sample_history_t
     std::chrono::steady_clock::time_point       sampled_at;
 };
 
+struct procstat_procs_deleter
+{
+    procstat* handle;
+
+    void operator()(kinfo_proc* entries) const
+    {
+        if (entries != nullptr)
+        {
+            procstat_freeprocs(handle, entries);
+        }
+    }
+};
+
 static std::optional<double> counter_rate(uint64_t current, uint64_t previous, uint64_t interval_us)
 {
     if (interval_us == 0 || current < previous)
@@ -206,23 +220,24 @@ static std::optional<double> counter_rate(uint64_t current, uint64_t previous, u
 
 static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int detail_pid, const std::unordered_map<int, previous_process_t>& previous, std::chrono::steady_clock::time_point sampled_at, sample_history_t& next_history, std::string& error)
 {
-    int count     = 0;
-    int operation = detail_pid == -1 ? KERN_PROC_PROC : KERN_PROC_PID;
+    unsigned int count     = 0;
+    int          operation = detail_pid == -1 ? KERN_PROC_PROC : KERN_PROC_PID;
     if (threads)
     {
         operation |= KERN_PROC_INC_THREAD;
     }
     errno               = 0;
-    kinfo_proc* entries = kvm_getprocs(top.kernel, operation, detail_pid == -1 ? 0 : detail_pid, &count);
+    kinfo_proc* entries = procstat_getprocs(top.procstat, operation, detail_pid == -1 ? 0 : detail_pid, &count);
     if (entries == nullptr && detail_pid != -1 && errno == ESRCH)
     {
         count = 0;
     }
     else if (entries == nullptr)
     {
-        error = std::format("kvm_getprocs: {}", kvm_geterr(top.kernel));
+        error = std::format("procstat_getprocs: {}", std::strerror(errno));
         return false;
     }
+    std::unique_ptr<kinfo_proc, procstat_procs_deleter> entries_owner(entries, procstat_procs_deleter{top.procstat});
 
     auto sample_timestamp   = std::chrono::steady_clock::now();
     auto sample_interval_us = sampled_at != std::chrono::steady_clock::time_point{} && sample_timestamp > sampled_at ? static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(sample_timestamp - sampled_at).count()) : 0;
@@ -238,9 +253,9 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int d
         error = std::format("cpuset_getaffinity (root): {}", std::strerror(errno));
         return false;
     }
-    for (int i = 0; i < count; ++i)
+    for (unsigned int i = 0; i < count; ++i)
     {
-        const auto& p = entries[i];
+        const auto& p = entries_owner.get()[i];
         if (p.ki_stat == 0)
         {
             continue;

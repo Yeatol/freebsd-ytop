@@ -3,8 +3,8 @@ SRCS=		main.cpp tui.cpp top.cpp terminal.cpp
 MAN=
 
 CXXSTD=		c++23
-LDADD+=		-lkvm
-DPADD+=		${LIBKVM}
+LDADD+=		-lprocstat
+DPADD+=		${LIBPROCSTAT}
 
 PREFIX?=	/usr/local
 BINDIR?=	${PREFIX}/bin
