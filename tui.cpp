@@ -101,7 +101,6 @@ struct display_row_t
     bool             thread         = false;
     int              threads        = 0;
     const process_t* record         = nullptr;
-    const process_t* command_source = nullptr;
     size_t           affinity_width = 3;
     size_t           username_width = 4;
 };
@@ -152,12 +151,11 @@ static std::array<std::string, 2> fault_values(const process_t& p)
             switch_value(p.majflt, p.majflt_per_second)};
 }
 
-static std::string process_line(const process_t& p, bool thread, const process_t& command_source, bool show_context_switches = false, size_t affinity_width = 3, size_t username_width = 4)
+static std::string process_line(const process_t& p, bool thread, size_t affinity_width = 3, size_t username_width = 4)
 {
-    std::string cpu = p.cpu < 0 ? "-" : std::to_string(p.cpu);
     std::string row;
-    row.reserve(128 + affinity_width + command_source.command.size());
-    if (thread || show_context_switches)
+    row.reserve(128 + affinity_width + p.command.size());
+    if (thread)
     {
         std::format_to(std::back_inserter(row), "{:>6} ", p.tid);
     }
@@ -165,7 +163,7 @@ static std::string process_line(const process_t& p, bool thread, const process_t
     {
         std::format_to(std::back_inserter(row), "{:>5} {:<{}} ", p.pid, p.username, username_width);
     }
-    if (show_context_switches)
+    if (thread)
     {
         std::format_to(std::back_inserter(row), "{:>3} ", p.priority);
     }
@@ -173,16 +171,16 @@ static std::string process_line(const process_t& p, bool thread, const process_t
     {
         std::format_to(std::back_inserter(row), "{:>5} ", p.nice);
     }
-    if (!thread && !show_context_switches)
+    if (!thread)
     {
         std::format_to(std::back_inserter(row), "{:>5} {:>5} {:>4} ", memory(p.size_kb), memory(p.resident_kb), file_descriptors(p.nofile));
     }
     std::format_to(std::back_inserter(row), "{:>6} ", runtime(p.runtime_us));
-    if ((!thread && !show_context_switches) || p.kernel_process)
+    if (!thread || p.kernel_process)
     {
         std::format_to(std::back_inserter(row), "{:>8.2f}% ", p.cpu_percent);
     }
-    if (thread || show_context_switches)
+    if (thread)
     {
         if (!p.kernel_process)
         {
@@ -199,29 +197,29 @@ static std::string process_line(const process_t& p, bool thread, const process_t
             }
         }
         std::format_to(std::back_inserter(row), "{:<9} ", std::string_view(p.state).substr(0, 9));
-        const auto values = switch_values(command_source);
+        const auto values = switch_values(p);
         for (size_t i = 0; i < values.size(); ++i)
         {
             std::format_to(std::back_inserter(row), "{:<9} ", values[i]);
         }
-        const auto faults = fault_values(command_source);
+        const auto faults = fault_values(p);
         for (size_t i = 0; i < faults.size(); ++i)
         {
             std::format_to(std::back_inserter(row), "{:<9} ", faults[i]);
         }
         if (!p.kernel_process)
         {
-            std::format_to(std::back_inserter(row), "{:>{}} ", command_source.affinity.empty() ? "-" : command_source.affinity, affinity_width);
+            std::format_to(std::back_inserter(row), "{:>{}} ", p.affinity.empty() ? "-" : p.affinity, affinity_width);
         }
-        std::format_to(std::back_inserter(row), "{:>3} ", cpu);
+        std::format_to(std::back_inserter(row), "{:>3} ", p.cpu < 0 ? "-" : std::to_string(p.cpu));
     }
-    if (!thread && !show_context_switches)
+    if (!thread)
     {
         const auto domain = p.jid > 0 ? std::format("j{}", p.jid) : p.kernel_process ? "k"
                                                                                      : "u";
         std::format_to(std::back_inserter(row), "{:>4} {:>4} ", domain, p.threads);
     }
-    row += command_source.command;
+    row += p.command;
     return row;
 }
 
@@ -301,20 +299,20 @@ static std::vector<display_row_t> lines(const snapshot_t& snapshot, int detail_p
     }
     header += detail_pid == -1 ? "COMMAND" : "THREAD";
     result.push_back({header});
-    auto append = [&](const process_t& p, bool thread, const process_t& source) {
+    auto append = [&](const process_t& p, bool thread) {
         std::string text;
         if (format_rows)
         {
-            text = process_line(p, thread, source, detail_pid != -1, affinity_width, username_width);
+            text = process_line(p, thread, affinity_width, username_width);
         }
         result.push_back({std::move(text), p.pid, p.tid, thread, thread ? 1 : p.threads,
-                          &p, &source, affinity_width, username_width});
+                          &p, affinity_width, username_width});
     };
     for (const auto& p : snapshot.processes)
     {
         if (detail_pid == -1)
         {
-            append(p, false, p);
+            append(p, false);
             continue;
         }
         if (p.pid != detail_pid)
@@ -327,13 +325,13 @@ static std::vector<display_row_t> lines(const snapshot_t& snapshot, int detail_p
         auto representative = std::ranges::find_if(thread_begin, thread_end, [&](const process_t& thread) { return thread.tid == p.tid; });
         if (representative != thread_end)
         {
-            append(*representative, true, *representative);
+            append(*representative, true);
         }
         for (auto thread = thread_begin; thread != thread_end; ++thread)
         {
             if (thread->tid != p.tid)
             {
-                append(*thread, true, *thread);
+                append(*thread, true);
             }
         }
     }
@@ -721,8 +719,8 @@ int tui(top_t& top)
                         auto& displayed        = display_output[output_row_index];
                         if (table_row != 0 && displayed.text.empty())
                         {
-                            displayed.text = process_line(*displayed.record, displayed.thread, *displayed.command_source,
-                                                          state.filtered_pid != -1, displayed.affinity_width, displayed.username_width);
+                            displayed.text = process_line(*displayed.record, displayed.thread,
+                                                          displayed.affinity_width, displayed.username_width);
                         }
                         frame[row].text       = displayed.text;
                         frame[row].foreground = row_is_selected ? terminal_color_t::blue : terminal_color_t::normal;

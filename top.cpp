@@ -36,7 +36,6 @@
 #include <sys/proc.h>
 #include <sys/time.h>
 #include <sys/user.h>
-#include <sys/param.h>
 #include <sys/cpuset.h>
 #include <sys/sysctl.h>
 #include <sys/priority.h>
@@ -209,15 +208,15 @@ struct procstat_procs_deleter
     }
 };
 
-struct procstat_files_deleter
+struct procstat_rlimitusage_deleter
 {
     procstat* handle;
 
-    void operator()(filestat_list* files) const
+    void operator()(rlim_t* usage) const
     {
-        if (files != nullptr)
+        if (usage != nullptr)
         {
-            procstat_freefiles(handle, files);
+            procstat_freerlimitusage(handle, usage);
         }
     }
 };
@@ -233,8 +232,9 @@ static std::optional<double> counter_rate(uint64_t current, uint64_t previous, u
 
 static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int detail_pid, const std::unordered_map<int, previous_process_t>& previous, std::chrono::steady_clock::time_point sampled_at, sample_history_t& next_history, std::string& error)
 {
-    unsigned int count     = 0;
-    int          operation = detail_pid == -1 ? KERN_PROC_PROC : KERN_PROC_PID;
+    unsigned int count        = 0;
+    int          operation    = detail_pid == -1 ? KERN_PROC_PROC : KERN_PROC_PID;
+    const bool   process_list = !threads && detail_pid == -1;
     if (threads)
     {
         operation |= KERN_PROC_INC_THREAD;
@@ -277,6 +277,15 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int d
         {
             continue;
         }
+        if (!threads && !process_list)
+        {
+            process_t parent{};
+            parent.pid            = p.ki_pid;
+            parent.tid            = p.ki_tid;
+            parent.kernel_process = (p.ki_flag & P_KPROC) != 0;
+            next.processes.push_back(std::move(parent));
+            continue;
+        }
 
         std::string affinity;
         if (threads && !(p.ki_flag & P_KPROC))
@@ -304,12 +313,12 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int d
         }
 
         double                cpu_fraction   = static_cast<double>(p.ki_pctcpu) / top.fscale;
-        auto                  user_time_us   = microseconds(p.ki_rusage.ru_utime);
-        auto                  kernel_time_us = microseconds(p.ki_rusage.ru_stime);
+        auto                  user_time_us   = threads ? microseconds(p.ki_rusage.ru_utime) : 0;
+        auto                  kernel_time_us = threads ? microseconds(p.ki_rusage.ru_stime) : 0;
         std::optional<double> user_cpu;
         std::optional<double> kernel_cpu;
         bool                  kernel_process = (p.ki_flag & P_KPROC) != 0;
-        if (sampled_at == std::chrono::steady_clock::time_point{})
+        if (threads && sampled_at == std::chrono::steady_clock::time_point{})
         {
             user_cpu   = 0.0;
             kernel_cpu = 0.0;
@@ -317,15 +326,15 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int d
         int                   record_id       = threads ? p.ki_tid : p.ki_pid;
         auto                  previous_record = previous.find(record_id);
         bool                  same_process    = previous_record != previous.end() && p.ki_runtime >= previous_record->second.runtime_us;
-        auto                  nvcsw           = static_cast<uint64_t>(p.ki_rusage.ru_nvcsw);
-        auto                  nivcsw          = static_cast<uint64_t>(p.ki_rusage.ru_nivcsw);
-        auto                  minflt          = static_cast<uint64_t>(p.ki_rusage.ru_minflt);
-        auto                  majflt          = static_cast<uint64_t>(p.ki_rusage.ru_majflt);
+        auto                  nvcsw           = threads ? static_cast<uint64_t>(p.ki_rusage.ru_nvcsw) : 0;
+        auto                  nivcsw          = threads ? static_cast<uint64_t>(p.ki_rusage.ru_nivcsw) : 0;
+        auto                  minflt          = threads ? static_cast<uint64_t>(p.ki_rusage.ru_minflt) : 0;
+        auto                  majflt          = threads ? static_cast<uint64_t>(p.ki_rusage.ru_majflt) : 0;
         std::optional<double> nvcsw_per_second;
         std::optional<double> nivcsw_per_second;
         std::optional<double> minflt_per_second;
         std::optional<double> majflt_per_second;
-        if (same_process)
+        if (threads && same_process)
         {
             nvcsw_per_second  = counter_rate(nvcsw, previous_record->second.nvcsw, sample_interval_us);
             nivcsw_per_second = counter_rate(nivcsw, previous_record->second.nivcsw, sample_interval_us);
@@ -338,16 +347,16 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int d
             if (same_process)
             {
                 cpu_fraction = static_cast<double>(p.ki_runtime - previous_record->second.runtime_us) / sample_interval_us;
-                if (!kernel_process && user_time_us >= previous_record->second.user_us && kernel_time_us >= previous_record->second.kernel_us)
+                if (threads && !kernel_process && user_time_us >= previous_record->second.user_us && kernel_time_us >= previous_record->second.kernel_us)
                 {
                     user_cpu   = static_cast<double>(user_time_us - previous_record->second.user_us) / sample_interval_us * 100;
                     kernel_cpu = static_cast<double>(kernel_time_us - previous_record->second.kernel_us) / sample_interval_us * 100;
                 }
             }
-            else if (!same_process)
+            else
             {
                 cpu_fraction = static_cast<double>(p.ki_runtime) / sample_interval_us;
-                if (!kernel_process)
+                if (threads && !kernel_process)
                 {
                     user_cpu   = static_cast<double>(user_time_us) / sample_interval_us * 100;
                     kernel_cpu = static_cast<double>(kernel_time_us) / sample_interval_us * 100;
@@ -359,14 +368,14 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int d
         {
             cpu_fraction = std::min(cpu_fraction, 1.0);
         }
-        if (kernel_process)
+        if (threads && kernel_process)
         {
             user_cpu.reset();
             kernel_cpu = cpu_fraction * 100;
         }
 
         std::string username;
-        if (!threads)
+        if (process_list)
         {
             auto username_entry = usernames.find(p.ki_ruid);
             if (username_entry == usernames.end())
@@ -395,40 +404,37 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int d
         {
             command = std::format("<{}>", command);
         }
-        int                   cpu_id      = p.ki_stat == SRUN && p.ki_oncpu != NOCPU ? p.ki_oncpu : p.ki_lastcpu;
-        uint64_t              size_kb     = static_cast<uint64_t>(p.ki_size) / 1024;
-        uint64_t              resident_kb = static_cast<uint64_t>(p.ki_rssize) * top.page_size / 1024;
+        int                   cpu_id      = threads ? (p.ki_stat == SRUN && p.ki_oncpu != NOCPU ? p.ki_oncpu : p.ki_lastcpu) : 0;
+        uint64_t              size_kb     = process_list ? static_cast<uint64_t>(p.ki_size) / 1024 : 0;
+        uint64_t              resident_kb = process_list ? static_cast<uint64_t>(p.ki_rssize) * top.page_size / 1024 : 0;
         std::optional<size_t> nofile;
-        if (!threads)
+        if (process_list)
         {
-            std::unique_ptr<filestat_list, procstat_files_deleter> files(
-                procstat_getfiles(top.procstat, &p, 0), procstat_files_deleter{top.procstat});
-            if (files != nullptr)
+            unsigned int                                          usage_count = 0;
+            std::unique_ptr<rlim_t, procstat_rlimitusage_deleter> usage(procstat_getrlimitusage(top.procstat, &p, &usage_count), procstat_rlimitusage_deleter{top.procstat});
+            if (usage != nullptr)
             {
-                nofile = 0;
-                filestat* file;
-                STAILQ_FOREACH(file, files.get(), next)
+                if (usage_count <= RLIMIT_NOFILE)
                 {
-                    if (file->fs_fd >= 0)
-                    {
-                        ++*nofile;
-                    }
+                    error = std::format("procstat_getrlimitusage (PID {}): missing file descriptor count", p.ki_pid);
+                    return false;
                 }
+                nofile = usage.get()[RLIMIT_NOFILE];
             }
         }
         next.processes.push_back(process_t{
             .pid                = p.ki_pid,
             .tid                = p.ki_tid,
-            .jid                = p.ki_jid,
+            .jid                = process_list ? p.ki_jid : 0,
             .kernel_process     = kernel_process,
             .username           = std::move(username),
-            .threads            = p.ki_numthreads,
+            .threads            = process_list ? p.ki_numthreads : 0,
             .nofile             = nofile,
-            .priority           = p.ki_pri.pri_level - PUSER,
-            .nice               = nice(p),
+            .priority           = threads ? p.ki_pri.pri_level - PUSER : 0,
+            .nice               = process_list ? nice(p) : std::string{},
             .size_kb            = size_kb,
             .resident_kb        = resident_kb,
-            .state              = state(p),
+            .state              = threads ? state(p) : std::string{},
             .cpu                = cpu_id == NOCPU ? -1 : cpu_id,
             .runtime_us         = p.ki_runtime,
             .cpu_percent        = cpu_fraction * 100,
@@ -513,25 +519,13 @@ static bool sample_cpus(const top_t& top, snapshot_t& snapshot, std::vector<std:
             continue;
         }
         const auto& previous = id < top.previous_per_cpu_ticks.size() ? top.previous_per_cpu_ticks[id] : zero;
-        snapshot.cpus.push_back(cpu_t{static_cast<int>(id), ticks, cpu_percentages(ticks, previous)});
+        snapshot.cpus.push_back(cpu_t{static_cast<int>(id), cpu_percentages(ticks, previous)});
     }
     if (snapshot.cpus.empty())
     {
         error = "kern.cp_times: no active CPUs";
         return false;
     }
-    size = sizeof(snapshot.cpu.ticks);
-    if (sysctlbyname("kern.cp_time", snapshot.cpu.ticks.data(), &size, nullptr, 0) == -1)
-    {
-        error = std::format("kern.cp_time: {}", std::strerror(errno));
-        return false;
-    }
-    if (size != sizeof(snapshot.cpu.ticks))
-    {
-        error = "kern.cp_time: unexpected sysctl value size";
-        return false;
-    }
-    snapshot.cpu.percent_tenths = cpu_percentages(snapshot.cpu.ticks, top.previous_cpu_ticks);
     return true;
 }
 
@@ -566,7 +560,6 @@ bool top_sample(top_t& top, snapshot_t& snapshot, std::string& error, int detail
     top.thread_previous        = std::move(thread_history.previous);
     top.thread_sampled_at      = thread_history.sampled_at;
     top.sampled_pid            = detail_pid;
-    top.previous_cpu_ticks     = next.cpu.ticks;
     top.previous_per_cpu_ticks = std::move(per_cpu_ticks);
     snapshot                   = std::move(next);
     return true;

@@ -73,6 +73,10 @@ A minimal process monitor for FreeBSD, written in C++23, for monitoring CPU-boun
 - `C`: CPU ID on which the thread is running or last ran.
 - `THREAD`: Thread name.
 
+CPU bars show per-logical-CPU usage. Thread CPU percentages and counter rates
+use consecutive samples; process rows do not collect thread-only metrics, and
+thread rows do not collect process-only usernames, file descriptors, or memory sizes.
+
 ## Mouse interaction
 
 - Left-click: Select a row; click the selected process again to enter the thread list.

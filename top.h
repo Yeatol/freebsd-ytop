@@ -73,16 +73,14 @@ struct process_t
 
 struct cpu_t
 {
-    int                         id = -1;
-    std::array<long, CPUSTATES> ticks{};
-    std::array<int, CPUSTATES>  percent_tenths{};
+    int                        id = -1;
+    std::array<int, CPUSTATES> percent_tenths{};
 };
 
 struct snapshot_t
 {
     std::vector<process_t> processes;
     std::vector<process_t> threads;
-    cpu_t                  cpu;
     std::vector<cpu_t>     cpus;
 };
 
@@ -108,7 +106,6 @@ struct top_t
     std::unordered_map<int, previous_process_t> thread_previous;
     int                                         max_cpus    = 0;
     int                                         sampled_pid = -1;
-    std::array<long, CPUSTATES>                 previous_cpu_ticks{};
     std::vector<std::array<long, CPUSTATES>>    previous_per_cpu_ticks;
 };
 
