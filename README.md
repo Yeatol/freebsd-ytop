@@ -2,7 +2,7 @@
 
 [![FreeBSD port version](https://repology.org/badge/version-for-repo/freebsd/ytop.svg)](https://www.freshports.org/sysutils/ytop/)
 
-A minimal process monitor for FreeBSD, written in C++23, for monitoring CPU-bound server applications. It uses FreeBSD's base-system compiler and `libprocstat`, with a built-in VT terminal module.
+A minimal process monitor for FreeBSD with built-in support for VT-compatible terminals.
 
 ## Dependencies
 
@@ -26,12 +26,12 @@ A minimal process monitor for FreeBSD, written in C++23, for monitoring CPU-boun
 
 - `PID`: Process ID.
 - `USER`: Username associated with the process's real user ID.
-- `NICE`: Nice value for time-sharing processes; lower values mean higher scheduling priority. Real-time and idle priorities use `r` and `i` prefixes, respectively; kernel threads have an additional `k` prefix, fixed-priority scheduling has an `F` suffix, and `-` means not applicable.
+- `NICE`: Nice value for time-sharing processes.
 - `SIZE`: Process virtual memory size, including text, data, and stack.
 - `RES`: Resident memory size.
 - `FDS`: Number of open file descriptors, `-` means the count could not be retrieved.
 - `TIME`: Accumulated user and system CPU time for the process.
-- `CPU`: Unweighted CPU percentage; 100% represents one logical CPU, and multithreaded processes can exceed 100%.
+- `CPU`: Unweighted CPU percentage.
 - `DOM`: Process domain: `k` for kernel processes, `u` for host user processes, and `j<ID>` for processes in a jail.
 - `THR`: Total thread count.
 - `COMMAND`: Command name.
@@ -40,31 +40,31 @@ A minimal process monitor for FreeBSD, written in C++23, for monitoring CPU-boun
 
 ```text
    TID PRI   TIME      UCPU      KCPU STATE     NIVCSW    NVCSW    SOFTFLT HARDFLT    A   C THREAD
-101161  59   0:00     0.00%     0.00% sigwai    0         4        12      0          -   6 main-thread
-101200  59   0:00     0.00%     0.00% kqread    1         1        8       0          0   0 network-thread-0
-101201  59   0:00     0.00%     0.00% kqread    0         2        5       0          1   1 network-thread-1
-101202  59   0:00     0.00%     0.00% kqread    1         2        4       0          2   2 network-thread-2
-101203  59   0:00     0.00%     0.00% kqread    1         5        6       0          3   3 network-thread-3
-101204  59   0:00     0.00%     0.00% kqread    0         3        4       0          4   4 network-thread-4
-101205  59   0:00     0.00%     0.00% kqread    1         3        3       0          5   5 network-thread-5
-101206  59   0:00     0.00%     0.00% kqread    1         3        6       0          6   6 network-thread-6
-101207  59   0:00     0.00%     0.00% kqread    1         2        5       0          7   7 network-thread-7
-101208  59   0:00     0.00%     0.00% kqread    1         3        8       0          8   8 network-thread-8
-101209  59   0:00     0.00%     0.00% kqread    1         2        7       0          9   9 network-thread-9
-101210  59   0:00     0.00%     0.00% kqread    0         3        5       0         10  10 network-thread-10
-101211  59   0:00     0.00%     0.00% kqread    1         3        6       0         11  11 network-thread-11
-101212  59   0:00     0.00%     0.00% kqread    0         4        4       0         12  12 network-thread-12
-101213  59   0:00     0.00%     0.00% kqread    1         2        7       0         13  13 network-thread-13
-101214  59   0:00     0.00%     0.00% kqread    1         2        6       0         14  14 network-thread-14
-101215  59   0:00     0.00%     0.00% kqread    1         3        5       0         15  15 network-thread-15
+101161  59   0:00     0.00%     0.00% sigwai    0         4        12      0          -   6 main
+101200  59   0:00     0.00%     0.00% kqread    1         1        8       0          0   0 thread0
+101201  59   0:00     0.00%     0.00% kqread    0         2        5       0          1   1 thread1
+101202  59   0:00     0.00%     0.00% kqread    1         2        4       0          2   2 thread2
+101203  59   0:00     0.00%     0.00% kqread    1         5        6       0          3   3 thread3
+101204  59   0:00     0.00%     0.00% kqread    0         3        4       0          4   4 thread4
+101205  59   0:00     0.00%     0.00% kqread    1         3        3       0          5   5 thread5
+101206  59   0:00     0.00%     0.00% kqread    1         3        6       0          6   6 thread6
+101207  59   0:00     0.00%     0.00% kqread    1         2        5       0          7   7 thread7
+101208  59   0:00     0.00%     0.00% kqread    1         3        8       0          8   8 thread8
+101209  59   0:00     0.00%     0.00% kqread    1         2        7       0          9   9 thread9
+101210  59   0:00     0.00%     0.00% kqread    0         3        5       0         10  10 thread10
+101211  59   0:00     0.00%     0.00% kqread    1         3        6       0         11  11 thread11
+101212  59   0:00     0.00%     0.00% kqread    0         4        4       0         12  12 thread12
+101213  59   0:00     0.00%     0.00% kqread    1         2        7       0         13  13 thread13
+101214  59   0:00     0.00%     0.00% kqread    1         2        6       0         14  14 thread14
+101215  59   0:00     0.00%     0.00% kqread    1         3        5       0         15  15 thread15
 ```
 
 - `TID`: Thread ID.
-- `PRI`: Current thread scheduling priority; lower values mean higher priority.
+- `PRI`: Current thread scheduling priority.
 - `TIME`: Accumulated user and system CPU time for the thread.
 - `UCPU`: User CPU percentage.
 - `KCPU`: System CPU percentage; kernel threads show only `KCPU`.
-- `STATE`: Current thread state; sleeping threads show the wait channel, and threads blocked on a lock show its name prefixed with `*`.
+- `STATE`: Current thread state.
 - `NIVCSW`: Cumulative involuntary context-switch count; `+rate` is the number of switches per second.
 - `NVCSW`: Cumulative voluntary context-switch count; `+rate` is the number of switches per second.
 - `SOFTFLT`: Cumulative minor page faults; `+rate` is the number of faults per second.
@@ -73,23 +73,19 @@ A minimal process monitor for FreeBSD, written in C++23, for monitoring CPU-boun
 - `C`: CPU ID on which the thread is running or last ran.
 - `THREAD`: Thread name.
 
-CPU bars show per-logical-CPU usage. Thread CPU percentages and counter rates
-use consecutive samples; process rows do not collect thread-only metrics, and
-thread rows do not collect process-only usernames, file descriptors, or memory sizes.
-
 ## Mouse interaction
 
 - Left-click: Select a row; click the selected process again to enter the thread list.
-- Right-click: Clear selection; with no selection in the thread list, return to the process list and select the original process if it still exists.
-- Mouse wheel: Scroll three rows per step without changing selection.
+- Right-click: Clear selection, return to the process list.
+- Mouse wheel: Scroll three rows per step.
 
 ## Keyboard interaction
 
-- `Up`: Select the previous row, wrapping from the first row to the last and scrolling automatically; with no selection, select the last row of the entire list.
-- `Down`: Select the next row, wrapping from the last row to the first and scrolling automatically; with no selection, select the first row of the entire list.
-- `Right`: Enter the selected process's thread list and clear selection; with no selected process or already in the thread list, do nothing.
-- `Left`: Clear selection first; with no selection in the thread list, return to the process list and select the original process if it still exists. With no selection in the process list, do nothing.
-- `q`: Quit and restore the terminal.
+- `Up`: Select the previous row.
+- `Down`: Select the next row.
+- `Right`: Enter the selected process's thread list.
+- `Left`: Return to the process list.
+- `q`: Quit.
 
 ## License
 [](https://github.com/Yeatol/freebsd-stund#license)
