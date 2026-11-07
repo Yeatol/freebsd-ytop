@@ -51,6 +51,38 @@ static std::string memory(uint64_t kb)
     return std::format("{}{}", kb, units[unit]);
 }
 
+static std::string file_descriptors(const std::optional<size_t>& count)
+{
+    if (!count.has_value())
+    {
+        return "-";
+    }
+
+    constexpr std::string_view units = "KMGTPE";
+    long double                value = *count;
+    size_t                     unit  = 0;
+    while (value >= 1000 && unit + 1 < units.size())
+    {
+        value /= 1000;
+        ++unit;
+    }
+    if (value >= 999.5L && unit + 1 < units.size())
+    {
+        value /= 1000;
+        ++unit;
+    }
+    std::string result = value < 9.95L ? std::format("{:.1f}", value) : std::format("{:.0f}", value);
+    if (result.ends_with(".0"))
+    {
+        result.resize(result.size() - 2);
+    }
+    if (unit != 0)
+    {
+        result += units[unit - 1];
+    }
+    return result;
+}
+
 static std::string runtime(uint64_t microseconds)
 {
     auto seconds = (microseconds + 500000) / 1000000;
@@ -137,7 +169,7 @@ static std::string process_line(const process_t& p, bool thread, const process_t
     }
     if (!thread && !show_context_switches)
     {
-        std::format_to(std::back_inserter(row), "{:>5} {:>5} ", memory(p.size_kb), memory(p.resident_kb));
+        std::format_to(std::back_inserter(row), "{:>5} {:>5} {:>4} ", memory(p.size_kb), memory(p.resident_kb), file_descriptors(p.nofile));
     }
     std::format_to(std::back_inserter(row), "{:>6} ", runtime(p.runtime_us));
     if ((!thread && !show_context_switches) || p.kernel_process)
@@ -227,7 +259,7 @@ static std::vector<display_row_t> lines(const snapshot_t& snapshot, int detail_p
     header += detail_pid != -1 ? std::format("{:>3} ", "PRI") : std::format("{:>5} ", "NICE");
     if (detail_pid == -1)
     {
-        header += std::format("{:>5} {:>5} ", "SIZE", "RES");
+        header += std::format("{:>5} {:>5} {:>4} ", "SIZE", "RES", "FDS");
     }
     header += std::format("{:>6} ", "TIME");
     if (detail_pid == -1 || kernel_process)

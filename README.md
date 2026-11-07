@@ -13,15 +13,15 @@ A minimal process monitor for FreeBSD, written in C++23, for monitoring CPU-boun
 ## Process list
 
 ```text
-  PID USER    NICE  SIZE   RES   TIME       CPU  DOM  THR COMMAND
-    0 root       -    0K    5M   0:07     0.04%    k  300 kernel
-    1 root       0   15M    3M   0:00     0.00%    u    1 init
-   11 root    ki31    0K  256K    54h  1686.88%    k   16 idle
-   12 root       -    0K   64K   0:00     0.00%    k    4 intr
- 1700 nobody     0   82M   30M   0:00     0.00%    u   17 stund
- 1800 root       0  256M  128M   0:12    12.50%   j1    1 c++
- 1801 root       0  256M  128M   0:24    25.00%   j2    1 c++
- 1802 root       0  256M  128M   0:36    37.50%   j3    1 c++
+  PID USER    NICE  SIZE   RES  FDS   TIME       CPU  DOM  THR COMMAND
+    0 root       -    0K    5M    0   0:07     0.04%    k  300 kernel
+    1 root       0   15M    3M    3   0:00     0.00%    u    1 init
+   11 root    ki31    0K  256K    0    54h  1686.88%    k   16 idle
+   12 root       -    0K   64K    0   0:00     0.00%    k    4 intr
+ 1700 nobody     0   82M   30M   35   0:00     0.00%    u   17 stund
+ 1800 root       0  256M  128M   10   0:12    12.50%   j1    1 c++
+ 1801 root       0  256M  128M   10   0:24    25.00%   j2    1 c++
+ 1802 root       0  256M  128M   10   0:36    37.50%   j3    1 c++
 ```
 
 - `PID`: Process ID.
@@ -29,6 +29,7 @@ A minimal process monitor for FreeBSD, written in C++23, for monitoring CPU-boun
 - `NICE`: Nice value for time-sharing processes; lower values mean higher scheduling priority. Real-time and idle priorities use `r` and `i` prefixes, respectively; kernel threads have an additional `k` prefix, fixed-priority scheduling has an `F` suffix, and `-` means not applicable.
 - `SIZE`: Process virtual memory size, including text, data, and stack.
 - `RES`: Resident memory size.
+- `FDS`: Number of open file descriptors, `-` means the count could not be retrieved.
 - `TIME`: Accumulated user and system CPU time for the process.
 - `CPU`: Unweighted CPU percentage; 100% represents one logical CPU, and multithreaded processes can exceed 100%.
 - `DOM`: Process domain: `k` for kernel processes, `u` for host user processes, and `j<ID>` for processes in a jail.

@@ -209,6 +209,19 @@ struct procstat_procs_deleter
     }
 };
 
+struct procstat_files_deleter
+{
+    procstat* handle;
+
+    void operator()(filestat_list* files) const
+    {
+        if (files != nullptr)
+        {
+            procstat_freefiles(handle, files);
+        }
+    }
+};
+
 static std::optional<double> counter_rate(uint64_t current, uint64_t previous, uint64_t interval_us)
 {
     if (interval_us == 0 || current < previous)
@@ -255,7 +268,7 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int d
     }
     for (unsigned int i = 0; i < count; ++i)
     {
-        const auto& p = entries_owner.get()[i];
+        auto& p = entries_owner.get()[i];
         if (p.ki_stat == 0)
         {
             continue;
@@ -376,9 +389,27 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int d
         {
             command = std::format("<{}>", command);
         }
-        int      cpu_id      = p.ki_stat == SRUN && p.ki_oncpu != NOCPU ? p.ki_oncpu : p.ki_lastcpu;
-        uint64_t size_kb     = static_cast<uint64_t>(p.ki_size) / 1024;
-        uint64_t resident_kb = static_cast<uint64_t>(p.ki_rssize) * top.page_size / 1024;
+        int                   cpu_id      = p.ki_stat == SRUN && p.ki_oncpu != NOCPU ? p.ki_oncpu : p.ki_lastcpu;
+        uint64_t              size_kb     = static_cast<uint64_t>(p.ki_size) / 1024;
+        uint64_t              resident_kb = static_cast<uint64_t>(p.ki_rssize) * top.page_size / 1024;
+        std::optional<size_t> nofile;
+        if (!threads)
+        {
+            std::unique_ptr<filestat_list, procstat_files_deleter> files(
+                procstat_getfiles(top.procstat, &p, 0), procstat_files_deleter{top.procstat});
+            if (files != nullptr)
+            {
+                nofile = 0;
+                filestat* file;
+                STAILQ_FOREACH(file, files.get(), next)
+                {
+                    if (file->fs_fd >= 0)
+                    {
+                        ++*nofile;
+                    }
+                }
+            }
+        }
         next.processes.push_back(process_t{
             .pid                = p.ki_pid,
             .tid                = p.ki_tid,
@@ -386,6 +417,7 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int d
             .kernel_process     = kernel_process,
             .username           = std::move(username),
             .threads            = p.ki_numthreads,
+            .nofile             = nofile,
             .priority           = p.ki_pri.pri_level - PUSER,
             .nice               = nice(p),
             .size_kb            = size_kb,

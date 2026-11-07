@@ -48,6 +48,7 @@ struct process_t
     bool                  kernel_process;
     std::string           username;
     int                   threads;
+    std::optional<size_t> nofile;
     int                   priority;
     std::string           nice;
     uint64_t              size_kb;
