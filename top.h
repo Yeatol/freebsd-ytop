@@ -59,8 +59,12 @@ struct process_t
     double                cpu_percent;
     uint64_t              nvcsw;
     uint64_t              nivcsw;
+    uint64_t              minflt;
+    uint64_t              majflt;
     std::optional<double> nvcsw_per_second;
     std::optional<double> nivcsw_per_second;
+    std::optional<double> minflt_per_second;
+    std::optional<double> majflt_per_second;
     std::optional<double> user_cpu_percent;
     std::optional<double> kernel_cpu_percent;
     std::string           command;
@@ -89,6 +93,8 @@ struct previous_process_t
     uint64_t kernel_us;
     uint64_t nvcsw;
     uint64_t nivcsw;
+    uint64_t minflt;
+    uint64_t majflt;
 };
 
 struct top_t

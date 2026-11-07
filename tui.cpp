@@ -146,6 +146,12 @@ static std::array<std::string, 2> switch_values(const process_t& p)
             switch_value(p.nvcsw, p.nvcsw_per_second)};
 }
 
+static std::array<std::string, 2> fault_values(const process_t& p)
+{
+    return {switch_value(p.minflt, p.minflt_per_second),
+            switch_value(p.majflt, p.majflt_per_second)};
+}
+
 static std::string process_line(const process_t& p, bool thread, const process_t& command_source, bool show_context_switches = false, size_t affinity_width = 3, size_t username_width = 4)
 {
     std::string cpu = p.cpu < 0 ? "-" : std::to_string(p.cpu);
@@ -197,6 +203,11 @@ static std::string process_line(const process_t& p, bool thread, const process_t
         for (size_t i = 0; i < values.size(); ++i)
         {
             std::format_to(std::back_inserter(row), "{:<9} ", values[i]);
+        }
+        const auto faults = fault_values(command_source);
+        for (size_t i = 0; i < faults.size(); ++i)
+        {
+            std::format_to(std::back_inserter(row), "{:<9} ", faults[i]);
         }
         if (!p.kernel_process)
         {
@@ -281,6 +292,7 @@ static std::vector<display_row_t> lines(const snapshot_t& snapshot, int detail_p
         {
             header += std::format("{:<9} ", switch_headers[i]);
         }
+        header += std::format("{:<9} {:<9} ", "SOFTFLT", "HARDFLT");
         if (!kernel_process)
         {
             header += std::format("{:>{}} ", "A", affinity_width);

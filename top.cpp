@@ -319,12 +319,18 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int d
         bool                  same_process    = previous_record != previous.end() && p.ki_runtime >= previous_record->second.runtime_us;
         auto                  nvcsw           = static_cast<uint64_t>(p.ki_rusage.ru_nvcsw);
         auto                  nivcsw          = static_cast<uint64_t>(p.ki_rusage.ru_nivcsw);
+        auto                  minflt          = static_cast<uint64_t>(p.ki_rusage.ru_minflt);
+        auto                  majflt          = static_cast<uint64_t>(p.ki_rusage.ru_majflt);
         std::optional<double> nvcsw_per_second;
         std::optional<double> nivcsw_per_second;
+        std::optional<double> minflt_per_second;
+        std::optional<double> majflt_per_second;
         if (same_process)
         {
             nvcsw_per_second  = counter_rate(nvcsw, previous_record->second.nvcsw, sample_interval_us);
             nivcsw_per_second = counter_rate(nivcsw, previous_record->second.nivcsw, sample_interval_us);
+            minflt_per_second = counter_rate(minflt, previous_record->second.minflt, sample_interval_us);
+            majflt_per_second = counter_rate(majflt, previous_record->second.majflt, sample_interval_us);
         }
         if (sample_interval_us != 0)
         {
@@ -348,7 +354,7 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int d
                 }
             }
         }
-        history.emplace(record_id, previous_process_t{p.ki_runtime, user_time_us, kernel_time_us, nvcsw, nivcsw});
+        history.emplace(record_id, previous_process_t{p.ki_runtime, user_time_us, kernel_time_us, nvcsw, nivcsw, minflt, majflt});
         if (threads)
         {
             cpu_fraction = std::min(cpu_fraction, 1.0);
@@ -428,8 +434,12 @@ static bool sample_records(top_t& top, snapshot_t& snapshot, bool threads, int d
             .cpu_percent        = cpu_fraction * 100,
             .nvcsw              = nvcsw,
             .nivcsw             = nivcsw,
+            .minflt             = minflt,
+            .majflt             = majflt,
             .nvcsw_per_second   = nvcsw_per_second,
             .nivcsw_per_second  = nivcsw_per_second,
+            .minflt_per_second  = minflt_per_second,
+            .majflt_per_second  = majflt_per_second,
             .user_cpu_percent   = user_cpu,
             .kernel_cpu_percent = kernel_cpu,
             .command            = command,

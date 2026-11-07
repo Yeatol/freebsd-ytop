@@ -39,24 +39,24 @@ A minimal process monitor for FreeBSD, written in C++23, for monitoring CPU-boun
 ## Thread list
 
 ```text
-   TID PRI   TIME      UCPU      KCPU STATE     NIVCSW    NVCSW       A   C THREAD
-101161  59   0:00     0.00%     0.00% sigwai    0         4           -   6 main-thread
-101200  59   0:00     0.00%     0.00% kqread    1         1           0   0 network-thread-0
-101201  59   0:00     0.00%     0.00% kqread    0         2           1   1 network-thread-1
-101202  59   0:00     0.00%     0.00% kqread    1         2           2   2 network-thread-2
-101203  59   0:00     0.00%     0.00% kqread    1         5           3   3 network-thread-3
-101204  59   0:00     0.00%     0.00% kqread    0         3           4   4 network-thread-4
-101205  59   0:00     0.00%     0.00% kqread    1         3           5   5 network-thread-5
-101206  59   0:00     0.00%     0.00% kqread    1         3           6   6 network-thread-6
-101207  59   0:00     0.00%     0.00% kqread    1         2           7   7 network-thread-7
-101208  59   0:00     0.00%     0.00% kqread    1         3           8   8 network-thread-8
-101209  59   0:00     0.00%     0.00% kqread    1         2           9   9 network-thread-9
-101210  59   0:00     0.00%     0.00% kqread    0         3          10  10 network-thread-10
-101211  59   0:00     0.00%     0.00% kqread    1         3          11  11 network-thread-11
-101212  59   0:00     0.00%     0.00% kqread    0         4          12  12 network-thread-12
-101213  59   0:00     0.00%     0.00% kqread    1         2          13  13 network-thread-13
-101214  59   0:00     0.00%     0.00% kqread    1         2          14  14 network-thread-14
-101215  59   0:00     0.00%     0.00% kqread    1         3          15  15 network-thread-15
+   TID PRI   TIME      UCPU      KCPU STATE     NIVCSW    NVCSW    SOFTFLT  HARDFLT  A   C THREAD
+101161  59   0:00     0.00%     0.00% sigwai    0         4        12      0          -   6 main-thread
+101200  59   0:00     0.00%     0.00% kqread    1         1        8       0          0   0 network-thread-0
+101201  59   0:00     0.00%     0.00% kqread    0         2        5       0          1   1 network-thread-1
+101202  59   0:00     0.00%     0.00% kqread    1         2        4       0          2   2 network-thread-2
+101203  59   0:00     0.00%     0.00% kqread    1         5        6       0          3   3 network-thread-3
+101204  59   0:00     0.00%     0.00% kqread    0         3        4       0          4   4 network-thread-4
+101205  59   0:00     0.00%     0.00% kqread    1         3        3       0          5   5 network-thread-5
+101206  59   0:00     0.00%     0.00% kqread    1         3        6       0          6   6 network-thread-6
+101207  59   0:00     0.00%     0.00% kqread    1         2        5       0          7   7 network-thread-7
+101208  59   0:00     0.00%     0.00% kqread    1         3        8       0          8   8 network-thread-8
+101209  59   0:00     0.00%     0.00% kqread    1         2        7       0          9   9 network-thread-9
+101210  59   0:00     0.00%     0.00% kqread    0         3        5       0         10  10 network-thread-10
+101211  59   0:00     0.00%     0.00% kqread    1         3        6       0         11  11 network-thread-11
+101212  59   0:00     0.00%     0.00% kqread    0         4        4       0         12  12 network-thread-12
+101213  59   0:00     0.00%     0.00% kqread    1         2        7       0         13  13 network-thread-13
+101214  59   0:00     0.00%     0.00% kqread    1         2        6       0         14  14 network-thread-14
+101215  59   0:00     0.00%     0.00% kqread    1         3        5       0         15  15 network-thread-15
 ```
 
 - `TID`: Thread ID.
@@ -67,6 +67,8 @@ A minimal process monitor for FreeBSD, written in C++23, for monitoring CPU-boun
 - `STATE`: Current thread state; sleeping threads show the wait channel, and threads blocked on a lock show its name prefixed with `*`.
 - `NIVCSW`: Cumulative involuntary context-switch count; `+rate` is the number of switches per second.
 - `NVCSW`: Cumulative voluntary context-switch count; `+rate` is the number of switches per second.
+- `SOFTFLT`: Cumulative minor page faults; `+rate` is the number of faults per second.
+- `HARDFLT`: Cumulative major page faults; `+rate` is the number of faults per second.
 - `A`: CPU affinity.
 - `C`: CPU ID on which the thread is running or last ran.
 - `THREAD`: Thread name.
