@@ -39,7 +39,7 @@ A minimal process monitor for FreeBSD, written in C++23, for monitoring CPU-boun
 ## Thread list
 
 ```text
-   TID PRI   TIME      UCPU      KCPU STATE     NIVCSW    NVCSW    SOFTFLT  HARDFLT  A   C THREAD
+   TID PRI   TIME      UCPU      KCPU STATE     NIVCSW    NVCSW    SOFTFLT HARDFLT    A   C THREAD
 101161  59   0:00     0.00%     0.00% sigwai    0         4        12      0          -   6 main-thread
 101200  59   0:00     0.00%     0.00% kqread    1         1        8       0          0   0 network-thread-0
 101201  59   0:00     0.00%     0.00% kqread    0         2        5       0          1   1 network-thread-1
