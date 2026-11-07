@@ -1,5 +1,5 @@
 PROG_CXX=	ytop
-SRCS=		main.cpp tui.cpp top.cpp terminal.cpp
+SRCS=		main.cpp tui.cpp top.cpp term.cpp
 MAN=
 
 CXXSTD=		c++23

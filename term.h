@@ -36,7 +36,7 @@
 #include <signal.h>
 #include <stddef.h>
 
-enum class terminal_event_kind_t
+enum class term_event_kind_t
 {
     none,
     redraw,
@@ -53,15 +53,15 @@ enum class terminal_event_kind_t
     wheel_down
 };
 
-struct terminal_event_t
+struct term_event_t
 {
-    terminal_event_kind_t kind      = terminal_event_kind_t::none;
-    char                  character = 0;
-    int                   x         = 0;
-    int                   y         = 0;
+    term_event_kind_t kind      = term_event_kind_t::none;
+    char              character = 0;
+    int               x         = 0;
+    int               y         = 0;
 };
 
-enum class terminal_color_t
+enum class term_color_t
 {
     normal = 39,
     black  = 30,
@@ -82,25 +82,24 @@ enum class terminal_color_t
     bright_white
 };
 
-struct terminal_color_span_t
+struct term_color_span_t
 {
-    size_t           offset = 0;
-    terminal_color_t color  = terminal_color_t::normal;
+    size_t       offset = 0;
+    term_color_t color  = term_color_t::normal;
 
-    bool operator==(const terminal_color_span_t&) const = default;
+    bool operator==(const term_color_span_t&) const = default;
 };
 
-struct terminal_row_t
+struct term_row_t
 {
-    std::string      text;
-    bool             reverse    = false;
-    terminal_color_t foreground = terminal_color_t::normal;
-    // Byte offsets in sanitized ASCII text; colored spans require ASCII rows.
-    std::vector<terminal_color_span_t> colors{};
-    std::vector<terminal_color_t>      right_bar{};
+    std::string                    text;
+    bool                           reverse    = false;
+    term_color_t                   foreground = term_color_t::normal;
+    std::vector<term_color_span_t> colors{};
+    std::vector<term_color_t>      right_bar{};
 };
 
-struct terminal_t
+struct term_t
 {
     termios                               saved_mode{};
     bool                                  mode_saved    = false;
@@ -109,8 +108,8 @@ struct terminal_t
     size_t                                signal_count = 0;
     int                                   height       = 24;
     int                                   width        = 80;
-    std::vector<terminal_row_t>           previous;
-    std::vector<terminal_row_t>           frame;
+    std::vector<term_row_t>               previous;
+    std::vector<term_row_t>               frame;
     std::string                           output;
     bool                                  synchronized_output = false;
     bool                                  sync_query_pending  = false;
@@ -119,9 +118,9 @@ struct terminal_t
     bool                                  discard_sequence = false;
 };
 
-bool terminal_open(terminal_t& terminal, std::string& error);
-bool terminal_close(terminal_t& terminal, std::string& error);
-bool terminal_size(terminal_t& terminal, bool& changed, std::string& error);
-bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& rows, std::string& error);
-bool terminal_read(terminal_t& terminal, terminal_event_t& event, int timeout_ms, std::string& error);
-bool terminal_stopped();
+bool term_open(term_t& terminal, std::string& error);
+bool term_close(term_t& terminal, std::string& error);
+bool term_size(term_t& terminal, bool& changed, std::string& error);
+bool term_render(term_t& terminal, const std::vector<term_row_t>& rows, std::string& error);
+bool term_read(term_t& terminal, term_event_t& event, int timeout_ms, std::string& error);
+bool term_stopped();

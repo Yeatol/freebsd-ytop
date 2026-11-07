@@ -27,7 +27,7 @@
 
 #include "top.h"
 #include "tui.h"
-#include "terminal.h"
+#include "term.h"
 
 #include <chrono>
 #include <format>
@@ -395,19 +395,19 @@ static void scroll_view(const std::vector<display_row_t>& output, int direction,
     scroll_offset  = std::clamp(scroll_offset + direction * 3, 0, max_offset);
 }
 
-static terminal_row_t cpu_line(const cpu_t& cpu, int cells = 10)
+static term_row_t cpu_line(const cpu_t& cpu, int cells = 10)
 {
-    terminal_row_t row;
+    term_row_t row;
     row.text.reserve(static_cast<size_t>(cells) + 5);
     row.colors.reserve(5);
     row.text = std::format("{:>3}[", cpu.id);
-    row.colors.push_back({0, terminal_color_t::bright_black});
-    const size_t               start    = row.text.size();
-    const int                  usage[]  = {cpu.percent_tenths[CP_USER] + cpu.percent_tenths[CP_NICE],
-                                           cpu.percent_tenths[CP_SYS], cpu.percent_tenths[CP_INTR]};
-    constexpr terminal_color_t colors[] = {terminal_color_t::green, terminal_color_t::red, terminal_color_t::yellow};
-    int                        total    = 0;
-    size_t                     filled   = 0;
+    row.colors.push_back({0, term_color_t::bright_black});
+    const size_t           start    = row.text.size();
+    const int              usage[]  = {cpu.percent_tenths[CP_USER] + cpu.percent_tenths[CP_NICE],
+                                       cpu.percent_tenths[CP_SYS], cpu.percent_tenths[CP_INTR]};
+    constexpr term_color_t colors[] = {term_color_t::green, term_color_t::red, term_color_t::yellow};
+    int                    total    = 0;
+    size_t                 filled   = 0;
     for (size_t i = 0; i < std::size(usage); ++i)
     {
         total += usage[i];
@@ -419,7 +419,7 @@ static terminal_row_t cpu_line(const cpu_t& cpu, int cells = 10)
             filled = end;
         }
     }
-    row.colors.push_back({start + filled, terminal_color_t::bright_black});
+    row.colors.push_back({start + filled, term_color_t::bright_black});
     row.text.append(static_cast<size_t>(cells) - filled, '|');
     row.text += ']';
     return row;
@@ -509,9 +509,9 @@ static int table_hit(const view_layout_t& layout, int visible_lines, int x, int 
                : -1;
 }
 
-static terminal_row_t cpu_grid_line(const std::vector<cpu_t>& cpus, int row, const cpu_layout_t& layout)
+static term_row_t cpu_grid_line(const std::vector<cpu_t>& cpus, int row, const cpu_layout_t& layout)
 {
-    terminal_row_t result;
+    term_row_t result;
     result.text.reserve(static_cast<size_t>(layout.width));
     result.colors.reserve(static_cast<size_t>(layout.columns) * 5);
     size_t base_rows  = cpus.size() / static_cast<size_t>(layout.columns);
@@ -596,8 +596,8 @@ int tui(top_t& top)
     std::string error;
     int         status = 0;
     {
-        terminal_t terminal;
-        if (!terminal_open(terminal, error))
+        term_t terminal;
+        if (!term_open(terminal, error))
         {
             status = 1;
         }
@@ -609,10 +609,10 @@ int tui(top_t& top)
             bool         cpu_rows_dirty = true;
             auto         next_sample    = std::chrono::steady_clock::now();
 
-            std::vector<display_row_t>  display_output;
-            std::vector<terminal_row_t> frame;
-            std::vector<terminal_row_t> cpu_frame;
-            auto                        refresh = [&] {
+            std::vector<display_row_t> display_output;
+            std::vector<term_row_t>    frame;
+            std::vector<term_row_t>    cpu_frame;
+            auto                       refresh = [&] {
                 if (!top_sample(top, snapshot, error, state.filtered_pid))
                 {
                     status = 1;
@@ -657,7 +657,7 @@ int tui(top_t& top)
                 redraw = true;
             };
 
-            while (status == 0 && !terminal_stopped())
+            while (status == 0 && !term_stopped())
             {
                 if (std::chrono::steady_clock::now() >= next_sample)
                 {
@@ -674,7 +674,7 @@ int tui(top_t& top)
                     }
                 }
                 bool resized = false;
-                if (!terminal_size(terminal, resized, error))
+                if (!term_size(terminal, resized, error))
                 {
                     status = 1;
                     break;
@@ -701,7 +701,7 @@ int tui(top_t& top)
                     for (int row = 0; row < layout.height; ++row)
                     {
                         frame[row].reverse    = false;
-                        frame[row].foreground = terminal_color_t::normal;
+                        frame[row].foreground = term_color_t::normal;
                         frame[row].colors.clear();
                         if (row >= layout.cpu.first_row && row < layout.cpu.first_row + layout.cpu.rows)
                         {
@@ -723,32 +723,32 @@ int tui(top_t& top)
                                                           displayed.affinity_width, displayed.username_width);
                         }
                         frame[row].text       = displayed.text;
-                        frame[row].foreground = row_is_selected ? terminal_color_t::blue : terminal_color_t::normal;
+                        frame[row].foreground = row_is_selected ? term_color_t::blue : term_color_t::normal;
                     }
-                    if (!terminal_render(terminal, frame, error))
+                    if (!term_render(terminal, frame, error))
                     {
                         status = 1;
                         break;
                     }
                     redraw = false;
                 }
-                terminal_event_t input;
-                auto             remaining  = std::chrono::ceil<std::chrono::milliseconds>(next_sample - std::chrono::steady_clock::now()).count();
-                int              timeout_ms = static_cast<int>(std::clamp<int64_t>(remaining, 0, 1000));
-                if (!terminal_read(terminal, input, timeout_ms, error))
+                term_event_t input;
+                auto         remaining  = std::chrono::ceil<std::chrono::milliseconds>(next_sample - std::chrono::steady_clock::now()).count();
+                int          timeout_ms = static_cast<int>(std::clamp<int64_t>(remaining, 0, 1000));
+                if (!term_read(terminal, input, timeout_ms, error))
                 {
                     status = 1;
                     break;
                 }
-                if (terminal_stopped() ||
-                    (input.kind == terminal_event_kind_t::character && input.character == 'q'))
+                if (term_stopped() ||
+                    (input.kind == term_event_kind_t::character && input.character == 'q'))
                 {
                     break;
                 }
-                if (input.kind == terminal_event_kind_t::mouse_press || input.kind == terminal_event_kind_t::mouse_release)
+                if (input.kind == term_event_kind_t::mouse_press || input.kind == term_event_kind_t::mouse_release)
                 {
                     int table_y = table_hit(layout, visible_line_count, input.x, input.y);
-                    if (input.kind == terminal_event_kind_t::mouse_press)
+                    if (input.kind == term_event_kind_t::mouse_press)
                     {
                         clear_press(state);
                         if (table_y != -1)
@@ -763,7 +763,7 @@ int tui(top_t& top)
                             redraw                   = true;
                         }
                     }
-                    if (input.kind == terminal_event_kind_t::mouse_release)
+                    if (input.kind == term_event_kind_t::mouse_release)
                     {
                         if (state.toggle_on_release && table_y != -1)
                         {
@@ -776,7 +776,7 @@ int tui(top_t& top)
                         clear_press(state);
                     }
                 }
-                else if (input.kind == terminal_event_kind_t::mouse_right_press)
+                else if (input.kind == term_event_kind_t::mouse_right_press)
                 {
                     if (state.selected_pid == -1 && state.filtered_pid != -1)
                     {
@@ -788,15 +788,15 @@ int tui(top_t& top)
                         redraw = true;
                     }
                 }
-                else if (input.kind == terminal_event_kind_t::redraw)
+                else if (input.kind == term_event_kind_t::redraw)
                 {
                     redraw = true;
                 }
-                else if (input.kind == terminal_event_kind_t::right)
+                else if (input.kind == term_event_kind_t::right)
                 {
                     enter_detail();
                 }
-                else if (input.kind == terminal_event_kind_t::left)
+                else if (input.kind == term_event_kind_t::left)
                 {
                     if (state.selected_pid != -1)
                     {
@@ -808,11 +808,11 @@ int tui(top_t& top)
                         exit_detail();
                     }
                 }
-                else if (input.kind == terminal_event_kind_t::up || input.kind == terminal_event_kind_t::down ||
-                         input.kind == terminal_event_kind_t::wheel_up || input.kind == terminal_event_kind_t::wheel_down)
+                else if (input.kind == term_event_kind_t::up || input.kind == term_event_kind_t::down ||
+                         input.kind == term_event_kind_t::wheel_up || input.kind == term_event_kind_t::wheel_down)
                 {
-                    int direction = input.kind == terminal_event_kind_t::up || input.kind == terminal_event_kind_t::wheel_up ? -1 : 1;
-                    if (input.kind == terminal_event_kind_t::wheel_up || input.kind == terminal_event_kind_t::wheel_down)
+                    int direction = input.kind == term_event_kind_t::up || input.kind == term_event_kind_t::wheel_up ? -1 : 1;
+                    if (input.kind == term_event_kind_t::wheel_up || input.kind == term_event_kind_t::wheel_down)
                     {
                         scroll_view(display_output, direction, layout.visible_rows, state.scroll_offset);
                     }
@@ -825,7 +825,7 @@ int tui(top_t& top)
             }
         }
         std::string close_error;
-        if (!terminal_close(terminal, close_error))
+        if (!term_close(terminal, close_error))
         {
             if (!error.empty())
             {

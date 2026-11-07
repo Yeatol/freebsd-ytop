@@ -25,7 +25,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "terminal.h"
+#include "term.h"
 
 #include <poll.h>
 #include <unistd.h>
@@ -55,7 +55,7 @@ static volatile sig_atomic_t suspend_requested = 0;
 static constexpr std::array  signals           = {SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGWINCH, SIGTSTP};
 static constexpr auto        escape_timeout    = std::chrono::milliseconds(100);
 
-static void terminal_signal(int signal)
+static void term_signal(int signal)
 {
     if (signal == SIGTSTP)
     {
@@ -67,7 +67,7 @@ static void terminal_signal(int signal)
     }
 }
 
-static bool terminal_error(std::string& error, const char* operation)
+static bool term_error(std::string& error, const char* operation)
 {
     error = std::format("{}: {}", operation, std::strerror(errno));
     return false;
@@ -84,7 +84,7 @@ static bool write_output(std::string_view output, std::string& error)
             {
                 continue;
             }
-            return terminal_error(error, "writing terminal output");
+            return term_error(error, "writing terminal output");
         }
         if (written == 0)
         {
@@ -96,14 +96,14 @@ static bool write_output(std::string_view output, std::string& error)
     return true;
 }
 
-static bool enter_screen(terminal_t& terminal, std::string& error)
+static bool enter_screen(term_t& terminal, std::string& error)
 {
     termios mode = terminal.saved_mode;
     cfmakeraw(&mode);
     mode.c_lflag |= ISIG;
     if (tcsetattr(STDIN_FILENO, TCSANOW, &mode) == -1)
     {
-        return terminal_error(error, "setting terminal mode");
+        return term_error(error, "setting terminal mode");
     }
     terminal.screen_active       = true;
     terminal.synchronized_output = false;
@@ -114,7 +114,7 @@ static bool enter_screen(terminal_t& terminal, std::string& error)
                         error);
 }
 
-static bool leave_screen(terminal_t& terminal, std::string& error)
+static bool leave_screen(term_t& terminal, std::string& error)
 {
     bool success = true;
     if (terminal.screen_active)
@@ -134,7 +134,7 @@ static bool leave_screen(terminal_t& terminal, std::string& error)
     if (terminal.mode_saved && tcsetattr(STDIN_FILENO, TCSANOW, &terminal.saved_mode) == -1)
     {
         std::string mode_error;
-        terminal_error(mode_error, "restoring terminal mode");
+        term_error(mode_error, "restoring terminal mode");
         if (!error.empty())
         {
             error += "; ";
@@ -145,7 +145,7 @@ static bool leave_screen(terminal_t& terminal, std::string& error)
     return success;
 }
 
-bool terminal_open(terminal_t& terminal, std::string& error)
+bool term_open(term_t& terminal, std::string& error)
 {
     if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO))
     {
@@ -165,27 +165,27 @@ bool terminal_open(terminal_t& terminal, std::string& error)
     }
     if (tcgetattr(STDIN_FILENO, &terminal.saved_mode) == -1)
     {
-        return terminal_error(error, "reading terminal mode");
+        return term_error(error, "reading terminal mode");
     }
     terminal.mode_saved = true;
     stopped             = 0;
     suspend_requested   = 0;
     struct sigaction action{};
-    action.sa_handler = terminal_signal;
+    action.sa_handler = term_signal;
     sigemptyset(&action.sa_mask);
     for (int signal : signals)
     {
         if (sigaction(signal, &action, &terminal.saved_signals[terminal.signal_count]) == -1)
         {
-            return terminal_error(error, "installing terminal signal handler");
+            return term_error(error, "installing terminal signal handler");
         }
         ++terminal.signal_count;
     }
     bool changed = false;
-    return terminal_size(terminal, changed, error) && enter_screen(terminal, error);
+    return term_size(terminal, changed, error) && enter_screen(terminal, error);
 }
 
-bool terminal_close(terminal_t& terminal, std::string& error)
+bool term_close(term_t& terminal, std::string& error)
 {
     bool success        = leave_screen(terminal, error);
     terminal.mode_saved = false;
@@ -195,7 +195,7 @@ bool terminal_close(terminal_t& terminal, std::string& error)
         if (sigaction(signals[terminal.signal_count], &terminal.saved_signals[terminal.signal_count], nullptr) == -1)
         {
             std::string signal_error;
-            terminal_error(signal_error, "restoring terminal signal handler");
+            term_error(signal_error, "restoring terminal signal handler");
             if (!error.empty())
             {
                 error += "; ";
@@ -215,13 +215,13 @@ bool terminal_close(terminal_t& terminal, std::string& error)
     return success;
 }
 
-bool terminal_size(terminal_t& terminal, bool& changed, std::string& error)
+bool term_size(term_t& terminal, bool& changed, std::string& error)
 {
     winsize size{};
     changed = false;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == -1)
     {
-        return terminal_error(error, "reading terminal size");
+        return term_error(error, "reading terminal size");
     }
     if (size.ws_row != 0 && size.ws_col != 0 &&
         (terminal.height != size.ws_row || terminal.width != size.ws_col))
@@ -344,7 +344,7 @@ static char cell(std::string_view text, size_t column)
     return column < text.size() ? text[column] : ' ';
 }
 
-static void set_foreground(std::string& output, terminal_color_t color, terminal_color_t& current, bool reverse)
+static void set_foreground(std::string& output, term_color_t color, term_color_t& current, bool reverse)
 {
     if (color != current)
     {
@@ -360,7 +360,7 @@ static void set_foreground(std::string& output, terminal_color_t color, terminal
     }
 }
 
-static bool sparse_color_changes(const terminal_row_t& current, const terminal_row_t& previous)
+static bool sparse_color_changes(const term_row_t& current, const term_row_t& previous)
 {
     if (current.colors.size() != previous.colors.size())
     {
@@ -378,7 +378,7 @@ static bool sparse_color_changes(const terminal_row_t& current, const terminal_r
     return true;
 }
 
-bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& rows, std::string& error)
+bool term_render(term_t& terminal, const std::vector<term_row_t>& rows, std::string& error)
 {
     auto& frame  = terminal.frame;
     auto& output = terminal.output;
@@ -397,13 +397,13 @@ bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& ro
     int    cursor_row    = -2;
     int    cursor_column = -1;
     bool   reverse       = false;
-    auto   foreground    = terminal_color_t::normal;
+    auto   foreground    = term_color_t::normal;
     for (int row = 0; row < terminal.height; ++row)
     {
         auto& line      = frame[row];
         bool  ascii     = true;
         line.reverse    = false;
-        line.foreground = terminal_color_t::normal;
+        line.foreground = term_color_t::normal;
         line.colors.clear();
         line.right_bar.clear();
         line.text.clear();
@@ -421,7 +421,7 @@ bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& ro
             ascii = display_text(rows[row].text, terminal.width - static_cast<int>(line.right_bar.size()),
                                  line.reverse || !line.right_bar.empty(), line.text);
             line.text.append(line.right_bar.size(), ' ');
-            if (!line.colors.empty() && (!ascii || !std::ranges::is_sorted(line.colors, {}, &terminal_color_span_t::offset)))
+            if (!line.colors.empty() && (!ascii || !std::ranges::is_sorted(line.colors, {}, &term_color_span_t::offset)))
             {
                 error = "color spans require sanitized ASCII text and ordered byte offsets";
                 return false;
@@ -439,7 +439,7 @@ bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& ro
             reverse = line.reverse;
             if (!reverse)
             {
-                foreground = terminal_color_t::normal;
+                foreground = term_color_t::normal;
             }
         }
         set_foreground(output, line.foreground, foreground, reverse);
@@ -530,7 +530,7 @@ bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& ro
                 for (auto color : line.right_bar)
                 {
                     set_foreground(output, color, foreground, reverse);
-                    output += color == terminal_color_t::normal ? " " : bar_character;
+                    output += color == term_color_t::normal ? " " : bar_character;
                 }
             }
             else
@@ -587,7 +587,7 @@ bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& ro
     }
     if (output.size() != start)
     {
-        if (reverse || foreground != terminal_color_t::normal)
+        if (reverse || foreground != term_color_t::normal)
         {
             output += "\033[0m";
         }
@@ -608,7 +608,7 @@ bool terminal_render(terminal_t& terminal, const std::vector<terminal_row_t>& ro
     return true;
 }
 
-static void mouse_event(terminal_event_t& event, int button, int x, int y, bool released)
+static void mouse_event(term_event_t& event, int button, int x, int y, bool released)
 {
     event.x = x;
     event.y = y;
@@ -617,20 +617,20 @@ static void mouse_event(terminal_event_t& event, int button, int x, int y, bool 
     {
         if (!released)
         {
-            event.kind = button == 64 ? terminal_event_kind_t::wheel_up : terminal_event_kind_t::wheel_down;
+            event.kind = button == 64 ? term_event_kind_t::wheel_up : term_event_kind_t::wheel_down;
         }
     }
     else if (button == 2 && !released)
     {
-        event.kind = terminal_event_kind_t::mouse_right_press;
+        event.kind = term_event_kind_t::mouse_right_press;
     }
     else if (button == 0 || button == 3)
     {
-        event.kind = released || button == 3 ? terminal_event_kind_t::mouse_release : terminal_event_kind_t::mouse_press;
+        event.kind = released || button == 3 ? term_event_kind_t::mouse_release : term_event_kind_t::mouse_press;
     }
 }
 
-static void sgr_mouse(std::string_view parameters, bool released, terminal_event_t& event)
+static void sgr_mouse(std::string_view parameters, bool released, term_event_t& event)
 {
     std::array<int, 3> values{};
     for (size_t i = 0; i < values.size(); ++i)
@@ -661,7 +661,7 @@ static void sgr_mouse(std::string_view parameters, bool released, terminal_event
     }
 }
 
-static bool decode_input(terminal_t& terminal, terminal_event_t& event)
+static bool decode_input(term_t& terminal, term_event_t& event)
 {
     while (!terminal.input.empty())
     {
@@ -678,7 +678,7 @@ static bool decode_input(terminal_t& terminal, terminal_event_t& event)
         }
         else if (terminal.input.front() != '\033')
         {
-            event.kind      = terminal_event_kind_t::character;
+            event.kind      = term_event_kind_t::character;
             event.character = terminal.input.front();
         }
         else
@@ -689,7 +689,7 @@ static bool decode_input(terminal_t& terminal, terminal_event_t& event)
             }
             if (terminal.input[1] == '\033')
             {
-                event.kind = terminal_event_kind_t::escape;
+                event.kind = term_event_kind_t::escape;
             }
             else if (terminal.input[1] == '[' && terminal.input.size() >= 3 && terminal.input[2] == 'M')
             {
@@ -759,16 +759,16 @@ static bool decode_input(terminal_t& terminal, terminal_event_t& event)
                     switch (final)
                     {
                         case 'A':
-                            event.kind = terminal_event_kind_t::up;
+                            event.kind = term_event_kind_t::up;
                             break;
                         case 'B':
-                            event.kind = terminal_event_kind_t::down;
+                            event.kind = term_event_kind_t::down;
                             break;
                         case 'C':
-                            event.kind = terminal_event_kind_t::right;
+                            event.kind = term_event_kind_t::right;
                             break;
                         case 'D':
-                            event.kind = terminal_event_kind_t::left;
+                            event.kind = term_event_kind_t::left;
                             break;
                     }
                 }
@@ -780,7 +780,7 @@ static bool decode_input(terminal_t& terminal, terminal_event_t& event)
         }
         terminal.input.erase(0, consumed);
         terminal.partial_since = {};
-        if (event.kind != terminal_event_kind_t::none)
+        if (event.kind != term_event_kind_t::none)
         {
             return true;
         }
@@ -788,7 +788,7 @@ static bool decode_input(terminal_t& terminal, terminal_event_t& event)
     return false;
 }
 
-bool terminal_read(terminal_t& terminal, terminal_event_t& event, int timeout_ms, std::string& error)
+bool term_read(term_t& terminal, term_event_t& event, int timeout_ms, std::string& error)
 {
     event = {};
     if (suspend_requested && !stopped)
@@ -800,14 +800,14 @@ bool terminal_read(terminal_t& terminal, terminal_event_t& event, int timeout_ms
         }
         if (raise(SIGSTOP) != 0)
         {
-            return terminal_error(error, "suspending terminal");
+            return term_error(error, "suspending terminal");
         }
         if (!enter_screen(terminal, error))
         {
             return false;
         }
         terminal.previous.clear();
-        event.kind = terminal_event_kind_t::redraw;
+        event.kind = term_event_kind_t::redraw;
         return true;
     }
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
@@ -832,7 +832,7 @@ bool terminal_read(terminal_t& terminal, terminal_event_t& event, int timeout_ms
                 if (terminal.input.size() == 1)
                 {
                     terminal.input.clear();
-                    event.kind = terminal_event_kind_t::escape;
+                    event.kind = term_event_kind_t::escape;
                 }
                 terminal.partial_since = {};
                 return true;
@@ -847,7 +847,7 @@ bool terminal_read(terminal_t& terminal, terminal_event_t& event, int timeout_ms
             {
                 return true;
             }
-            return terminal_error(error, "waiting for terminal input");
+            return term_error(error, "waiting for terminal input");
         }
         if (ready == 0)
         {
@@ -868,7 +868,7 @@ bool terminal_read(terminal_t& terminal, terminal_event_t& event, int timeout_ms
                 {
                     return true;
                 }
-                return terminal_error(error, "reading terminal input");
+                return term_error(error, "reading terminal input");
             }
             if (count == 0)
             {
@@ -881,7 +881,7 @@ bool terminal_read(terminal_t& terminal, terminal_event_t& event, int timeout_ms
     return true;
 }
 
-bool terminal_stopped()
+bool term_stopped()
 {
     return stopped != 0;
 }
